@@ -1,8 +1,9 @@
 import numpy as np
 import pickle as pkl
+import os
 from scipy import sparse
 from scipy.sparse.linalg import lsqr
-
+from scipy.optimize import minimize
 
 def sine_function(Dt):
     x = np.linspace(0, 2*np.pi, Dt, endpoint = False)
@@ -10,29 +11,41 @@ def sine_function(Dt):
     return sine
 
 def translate(data, d):
-    while d < 0:
+    while d < 0: #what is the use of this ?
         d = d + data.size
     tmp = np.zeros(data.size)
     for i in range(data.size):
         tmp[i] = data[(i + d) % data.size]
     return tmp
 
-
 def calc_residue(data, wavelets, sparse_wavelets):
-    data = data - np.mean(data)
-    betas = lsqr(sparse_wavelets, data, damp=0.001, atol=0, btol=0, conlim=0)[0]
+    '''
+    Calculate the baseline residue, before optimizing the position of the wavelet on the signal.
+
+    '''
+    data_no_mean = data - np.mean(data)
+    betas = lsqr(sparse_wavelets, data_no_mean, damp=0.001, atol=0, btol=0, conlim=0)[0]
+    
     for i in range(wavelets.shape[0]):
-        data = data - betas[i]*wavelets[i,:]
-    residue = np.sum(data*data)
+        data_no_mean = data_no_mean - betas[i]*wavelets[i,:]
+    residue = np.sum(data_no_mean*data_no_mean)
+    print('Residue')
+    print(residue)
     return residue
 
+
 def calc_best_trans(wavelets, sparse_wavelets, signal_in, ndpd, dpy):
+    '''
+    signal_in : the signal to find the best translation
+    wavelets : signal of the wavelet 1 to -1 in a square (or sine) shape
+    sparse_wavelets : same as wavelets but csr matrix transposed 
+    '''
     assert(len(signal_in) == ndpd * dpy), 'dimension mismatch'
     veclength = ndpd * dpy
     best_residue = np.sum(signal_in*signal_in)
     best_day = 0
     for counter in range(veclength):
-        data = translate(signal_in, counter)
+        data = translate(signal_in, counter) #remplacer par roll ? 
         residue = calc_residue(data, wavelets, sparse_wavelets)
         if residue < best_residue:
             best_day = counter
@@ -42,7 +55,10 @@ def calc_best_trans(wavelets, sparse_wavelets, signal_in, ndpd, dpy):
 
     return best_day
 
-def calc_trans(ndpd, dpy, input_data, wl_shape):
+
+def calculate_all_translations(path_trans, translation_name, 
+                               ndpd, dpy, input_data, wl_shape, 
+                               recompute_translation= False):
     '''
     Compute best translations for each years of the input data
     :param ndpd: data per day
@@ -53,70 +69,241 @@ def calc_trans(ndpd, dpy, input_data, wl_shape):
     '''
     veclength = ndpd*dpy
     Nyears = int(len(input_data)/veclength)
-    assert(dpy*ndpd % len(input_data) ),'Number of years and points are not consistent'
+
+    signal_length = len(input_data)
+    assert (signal_length % (dpy * ndpd) == 0), 'The signal length is not an integer number of years.'
     assert(wl_shape != 'sine' or wl_shape != 'square'), 'Shape error. must be either square or sine_function'
-    trans = []
-    for k in range(Nyears):
-        signal_in = input_data[k*veclength: (k+1)*veclength]
-        # Year
-        # Creat year mother waveley
-        #
-        Dt = dpy * ndpd
-        signal_length = dpy * ndpd
-        #
-        vec_year = np.zeros((1, signal_length))
-        if wl_shape == 'square':
-            vec_year[0, 0:  Dt // 2] = 1.  # /math.sqrt(Dt)
-            vec_year[0, Dt // 2:  Dt] = -1.  # /math.sqrt(Dt)
-        if wl_shape == 'sine':
-            vec_year[0, :] =  sine_function(Dt)
-        vec_year_sparse = sparse.csr_matrix(np.transpose(vec_year))
 
-        best_trans_year = calc_best_trans(vec_year, vec_year_sparse, signal_in, ndpd, dpy)
+    # Check if the file exists and is consistent with the number of years of the input signal. If not, recomputing the translations
+    filename_pkl = os.path.join(os.getcwd(), path_trans, 'results_translation_'+ translation_name +'.pkl')
 
-        # ----------------------------
-        # Week
-        # Creat week mother wavelets
-        Dt = 7 * ndpd  # points
-        vec_week = np.zeros((52, signal_length))
-        c = 0
-        i = 0
-        while i < 52:  # loop over the time scales
+    if os.path.exists(filename_pkl) and not recompute_translation:
+        # Load the data from the 'results_translation.pkl' file if its size is consistent with the number of year of the input signal
+        with open(filename_pkl, 'rb') as file:
+            trans = pkl.load(file)
+        if len(trans) == Nyears :
+            print(f"Loading existing translation file: {filename_pkl}")
+    else:
+        # File does not exist, so compute the translation
+        print("Computing translation...")
+
+        trans = []
+        for k in range(Nyears):
+            signal_in = input_data[k*veclength: (k+1)*veclength] #get the data for one year only to perform the translation
+            # Year
+            # Creat year mother wavelet
+            
+            Dt = dpy * ndpd
+            signal_length = dpy * ndpd
+            
+            vec_year = np.zeros((1, signal_length))
             if wl_shape == 'square':
-                vec_week[c, 2 * i * Dt // 2: (2 * i + 1) * Dt // 2] = 1.
-                vec_week[c, (2 * i + 1) * Dt // 2: (2 * i + 2) * Dt // 2] = -1.
+                vec_year[0, 0:  Dt // 2] = 1.  # /math.sqrt(Dt)
+                vec_year[0, Dt // 2:  Dt] = -1.  # /math.sqrt(Dt)
             if wl_shape == 'sine':
-                vec_week[c, i*Dt : (i+1)*Dt ] = sine_function(Dt)
-            c = c + 1
-            i = i + 1
+                vec_year[0, :] =  sine_function(Dt)
+            vec_year_sparse = sparse.csr_matrix(np.transpose(vec_year))
+            # print(vec_year)
+            # print(vec_year_sparse)
+            best_trans_year = calc_best_trans(vec_year, vec_year_sparse, signal_in, ndpd, dpy)
 
-        vec_week_sparse = sparse.csr_matrix(np.transpose(vec_week))
+            # ----------------------------
+            # Week
+            # Create week mother wavelets
+            Dt = 7 * ndpd  # points
+            vec_week = np.zeros((52, signal_length))
+            c = 0
+            i = 0
+            # while i < 52:  # loop over the time scales # pourquoi pas une boucle for ?
+            #     if wl_shape == 'square':
+            #         vec_week[c, 2 * i * Dt // 2: (2 * i + 1) * Dt // 2] = 1.
+            #         vec_week[c, (2 * i + 1) * Dt // 2: (2 * i + 2) * Dt // 2] = -1.
+            #     if wl_shape == 'sine':
+            #         vec_week[c, i*Dt : (i+1)*Dt ] = sine_function(Dt)
+            #     c = c + 1
+            #     i = i + 1
 
-        best_trans_week = calc_best_trans(vec_week, vec_week_sparse, signal_in, ndpd, dpy)
+            for i in range(52): 
+                c=i
+                if wl_shape == 'square':
+                    vec_week[c, 2 * i * Dt // 2: (2 * i + 1) * Dt // 2] = 1.
+                    vec_week[c, (2 * i + 1) * Dt // 2: (2 * i + 2) * Dt // 2] = -1.
+                if wl_shape == 'sine':
+                    vec_week[c, i*Dt : (i+1)*Dt ] = sine_function(Dt)
 
-        # ----------------------------
-        # Days
-        # Creat daymother wavelets
-        Dt = ndpd  # points /day
-        vec_day = np.zeros((dpy, signal_length))
-        c = 0
-        i = 0
-        while i < dpy:  # loop over the time scales
-            if wl_shape == 'square':
-                vec_day[c, 2 * i * Dt // 2: (2 * i + 1) * Dt // 2] = 1.
-                vec_day[c, (2 * i + 1) * Dt // 2: (2 * i + 2) * Dt // 2] = -1.
-            if wl_shape == 'sine':
-                vec_day[c, i*Dt : (i+1)*Dt] = sine_function(Dt)
-            c = c + 1
-            i = i + 1
-        vec_day_sparse = sparse.csr_matrix(np.transpose(vec_day))
+            vec_week_sparse = sparse.csr_matrix(np.transpose(vec_week))
 
-        best_trans_day = calc_best_trans(vec_day, vec_day_sparse, signal_in, ndpd, dpy)
+            best_trans_week = calc_best_trans(vec_week, vec_week_sparse, signal_in, ndpd, dpy)
 
-        print([best_trans_day, best_trans_week, best_trans_year])
-        trans.append( [best_trans_day, best_trans_week, best_trans_year] )
+            # ----------------------------
+            # Days
+            # Creat daymother wavelets
+            Dt = ndpd  # points /day
+            vec_day = np.zeros((dpy, signal_length))
+            c = 0
+            i = 0
+            # while i < dpy:  # loop over the time scales
+            #     if wl_shape == 'square':
+            #         vec_day[c, 2 * i * Dt // 2: (2 * i + 1) * Dt // 2] = 1.
+            #         vec_day[c, (2 * i + 1) * Dt // 2: (2 * i + 2) * Dt // 2] = -1.
+            #     if wl_shape == 'sine':
+            #         vec_day[c, i*Dt : (i+1)*Dt] = sine_function(Dt)
+            #     c = c + 1
+            #     i = i + 1
+            for i in range(dpy):  # loop over the time scales
+                if wl_shape == 'square':
+                    vec_day[i, 2 * i * Dt // 2: (2 * i + 1) * Dt // 2] = 1.
+                    vec_day[i, (2 * i + 1) * Dt // 2: (2 * i + 2) * Dt // 2] = -1.
+                if wl_shape == 'sine':
+                    vec_day[i, i*Dt : (i+1)*Dt] = sine_function(Dt)
+               
+            
+            vec_day_sparse = sparse.csr_matrix(np.transpose(vec_day))
+
+            best_trans_day = calc_best_trans(vec_day, vec_day_sparse, signal_in, ndpd, dpy)
+
+            # print([best_trans_day, best_trans_week, best_trans_year])
+            print(f"Best translation day = {best_trans_day}")
+            print(f"Best translation week = {best_trans_week}")
+            print(f"Best translation year = {best_trans_year}")
+            
+            trans.append( [best_trans_day, best_trans_week, best_trans_year] )
+
+            # Save the results of the translation in the 'translation/' directory
+            with open(filename_pkl, 'wb') as file:
+                pkl.dump(trans, file)
     return trans
 
+def calc_all_translations_justine(path_trans, translation_name, 
+                               ndpd, dpy, input_data, wl_shape, 
+                               recompute_translation= False):
+
+    veclength = ndpd*dpy
+    Nyears = int(len(input_data)/veclength)
+
+    signal_length = len(input_data)
+    assert (signal_length % (dpy * ndpd) == 0), 'The signal length is not an integer number of years.'
+    assert(wl_shape != 'sine' or wl_shape != 'square'), 'Shape error. must be either square or sine_function'
+
+    # Check if the file exists and is consistent with the number of years of the input signal. If not, recomputing the translations
+    filename_pkl = os.path.join(os.getcwd(), path_trans, 'results_translation_justine_'+ translation_name +'.pkl')
+
+    if os.path.exists(filename_pkl) and not recompute_translation:
+        # Load the data from the 'results_translation.pkl' file if its size is consistent with the number of year of the input signal
+        with open(filename_pkl, 'rb') as file:
+            trans = pkl.load(file)
+        if len(trans) == Nyears :
+            print(f"Loading existing translation file: {filename_pkl}")
+    else:
+        # File does not exist, so compute the translation
+        print("Computing translation...")
+
+        trans = []
+        for k in range(Nyears):
+            signal_in = input_data[k*veclength: (k+1)*veclength] #get the data for one year only to perform the translation
+
+            # Year
+            # Creat year mother wavelet
+            
+            Dt = dpy * ndpd
+            signal_length = dpy * ndpd
+            
+            vec_year = np.zeros((1, signal_length))
+            if wl_shape == 'square':
+                vec_year[0, 0:  Dt // 2] = 1.  # /math.sqrt(Dt)
+                vec_year[0, Dt // 2:  Dt] = -1.  # /math.sqrt(Dt)
+            if wl_shape == 'sine':
+                vec_year[0, :] =  sine_function(Dt)
+
+            best_trans_year = best_translation_year_justine(vec_year, signal_in)
+            # ----------------------------
+            # Week
+            # Create week mother wavelets
+            Dt = 7 * ndpd  # points
+            vec_week = np.zeros((52, signal_length))
+            c = 0
+            i = 0
+
+            for i in range(52): 
+                c=i
+                if wl_shape == 'square':
+                    vec_week[c, 2 * i * Dt // 2: (2 * i + 1) * Dt // 2] = 1.
+                    vec_week[c, (2 * i + 1) * Dt // 2: (2 * i + 2) * Dt // 2] = -1.
+                if wl_shape == 'sine':
+                    vec_week[c, i*Dt : (i+1)*Dt ] = sine_function(Dt)
+
+            # vec_week_sparse = sparse.csr_matrix(np.transpose(vec_week))
+
+            best_trans_week = best_translation_week_justine(vec_week, signal_in, ndpd)
+
+            # ----------------------------
+            # Days
+            # Creat daymother wavelets
+            Dt = ndpd  # points /day
+            vec_day = np.zeros((dpy, signal_length))
+            c = 0
+            i = 0
+            for i in range(dpy):  # loop over the time scales
+                if wl_shape == 'square':
+                    vec_day[i, 2 * i * Dt // 2: (2 * i + 1) * Dt // 2] = 1.
+                    vec_day[i, (2 * i + 1) * Dt // 2: (2 * i + 2) * Dt // 2] = -1.
+                if wl_shape == 'sine':
+                    vec_day[i, i*Dt : (i+1)*Dt] = sine_function(Dt)
+            # vec_day_total = np.sum(vec_day, axis =0)
+            best_trans_day = best_translation_day_justine(vec_day, signal_in, ndpd)
+
+            print(f"Best translation day = {best_trans_day}")
+            print(f"Best translation week = {best_trans_week}")
+            print(f"Best translation year = {best_trans_year}")
+            trans.append([best_trans_day,best_trans_week, best_trans_year] )
+
+            # Save the results of the translation in the 'translation/' directory
+            with open(filename_pkl, 'wb') as file:
+                pkl.dump(trans, file)
+    return trans
+
+def best_translation_week_justine(wavelet, input_data, ndpd): #find translation where scalar product is maximal of one wavelet
+    
+    input_data = input_data-input_data.mean()
+    total_vec_week = np.sum(wavelet, axis =0)
+    best_scalar_product = np.dot(total_vec_week, input_data)
+    t0=0
+    for j in range(7*ndpd):
+        vec_week_shifted = np.roll(total_vec_week, j)  # loop over the time scales
+        scalar_product = np.dot(vec_week_shifted, input_data)
+        print(scalar_product)
+        if scalar_product>best_scalar_product:
+            best_scalar_product = scalar_product
+            t0 = j
+    return t0
+
+def best_translation_day_justine(wavelet, input_data, ndpd): #find translation where scalar product is maximal of one wavelet
+    
+    input_data = input_data-input_data.mean()
+    total_vec_day = np.sum(wavelet, axis =0)
+    best_scalar_product = np.dot(total_vec_day, input_data)
+    t0=0
+    for j in range(ndpd):
+        vec_day_shifted = np.roll(total_vec_day, j)  # loop over the time scales
+        scalar_product = np.dot(vec_day_shifted, input_data)
+        print(scalar_product)
+        if scalar_product>best_scalar_product:
+            best_scalar_product = scalar_product
+            t0 = j
+    return t0
+
+def best_translation_year_justine(wavelet, input_data): #find translation where scalar product is maximal of one wavelet
+    best_scalar_product = np.dot(wavelet, input_data)
+    input_data = input_data-input_data.mean()
+    t0 = 0
+    for j in range(len(input_data)):
+        wavelet_shifted = np.roll(wavelet, j)
+        scalar_product = np.dot(wavelet_shifted, input_data)
+        if scalar_product>best_scalar_product:
+            best_scalar_product = scalar_product
+            t0 = j
+    print('Best scalar product :' + str(best_scalar_product))
+    return t0
 
 def load_trans(path_trans, trans_file, stacked_input_data, signal_type, ndpd, dpy, shape, do_calc = True):
     '''
