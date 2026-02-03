@@ -32,72 +32,58 @@ def fill_missing_values(start_date, end_date, data, method = 'linear'):
     data_interpolated = data_reindexed.interpolate(method="linear")
     return data_interpolated
 
-def get_pv_data(dpd, dpyn, ndpd, country_name, year, state_name = None):
-    points_in_world = gpd.read_file('./optim_mix/grid_with_centroids_states.geojson')
-    folder = path_input_data + f'/{country_name}'
+def get_chu_data(country_name, country_code, enr, path_input_data, dpd, dpy, ndpd, region_chu = None, state_name = None, norm= 'mean'):
+    """Fetch time series.
+    Returns the time series (array) normalized by the mean and the mean (int)"""
+    try :
+        if enr=='wind':
+            suffix_ts = 'wind_onshore_10y'
+            suffix_data = 'full_chu_wind_onshore_capacity_weighted'
+            # suffix_data = 'chu_wind_onshore_averaged'
+            suffix_chu_data = 'chu_wind_onshore_aggregated'
+            folder = 'Wind_Onshore/'
+        elif enr =='pv':
+            suffix_ts = 'pv_fixed_10y'
+            suffix_data = 'full_chu_pv_fixed_capacity_weighted'
+            # suffix_data = 'chu_pv_fixed_averaged'
+            suffix_chu_data = 'pv_fixed_aggregated'
+            folder = 'PV_Fixed/'
+    except Exception as e:
+        print(e)
 
-    if state_name : 
-        partie_name_file = f'grid_locations_averaged_pv_{country_name}_{state_name}_{year}.xlsx'
-    else: 
-        partie_name_file = f'grid_locations_averaged_pv_{country_name}_{year}.xlsx' 
+    if state_name: 
+        file_name = f'{country_name}/{country_code}_{region_chu}_{suffix_ts}.xlsx'
 
-    chemin_pattern = os.path.join(folder, f'*{partie_name_file}*')
-    fichiers_trouves = glob.glob(chemin_pattern)
+        if not os.path.exists(path_input_data+folder+file_name):  
+            file_name = f'{country_name}/{country_code}_{region_chu}_{suffix_chu_data}.xlsx'
+            df = pd.read_excel(path_input_data+folder+file_name)
+            
+            time_series = pd.concat([df[col] for col in df.columns], ignore_index=True)
+            result_df = pd.DataFrame({'Time Series': time_series})
 
-    if len(fichiers_trouves)==0:
-        print('collecting data')
-        fetch_and_average_data_ren_ninja(country_name, 1, ['pv'], points_in_world, state = state_name, year=year, save = True, coordinates = mode)
+            # Sauvegarder le résultat dans un nouveau fichier Excel
+            result_df.to_excel(path_input_data+folder+f'{country_name}/{country_code}_{region_chu}_{suffix_ts}.xlsx', index=False)
+            # print(result_df)
+            file_name = f'{country_name}/{country_code}_{region_chu}_{suffix_ts}.xlsx'
+    else:
+        file_name = f'Countries/{country_code}_full_{suffix_ts}.xlsx'
+        # file_name = f'Countries/{country_code}_{suffix_ts}.xlsx'
+        if not os.path.exists(path_input_data+folder+file_name):
+            file_name = f'Countries/{country_code}_{suffix_data}.xlsx'
+            df = pd.read_excel(path_input_data+folder+file_name)
+            # print(df)
 
-    fichiers_trouves = glob.glob(chemin_pattern)
+            time_series = pd.concat([df[col] for col in df.columns], ignore_index=True)
+            result_df = pd.DataFrame({'Time Series': time_series})
 
-    file_name = fichiers_trouves[0].split('//',2)[-1]
-
-    if purpose == 'optim':
-        norm = None
-    elif purpose == 'wavelet':
-        norm = 'mean'
-    
-    PV_ts = import_excel(path_input_data,file_name, 
+            # Sauvegarder le résultat dans un nouveau fichier Excel
+            result_df.to_excel(path_input_data+folder+f'Countries/{country_code}_full_{suffix_ts}.xlsx', index=False)
+            file_name = f'Countries/{country_code}_full_{suffix_ts}.xlsx'
+    print(file_name)
+    Wind_ts = import_excel(path_input_data+folder,file_name, 
                                     dpd ,ndpd, dpy, 
                                     interp=True, norm = norm) # interpolate data from dpd to ndpd numper of points per day
 
-    mean_pv = pd.read_excel(path_input_data+file_name).mean().iloc[0]
-    print(f'Série temporelle normalisée pour {purpose}: {norm}')
-
-    return PV_ts, mean_pv
-
-def get_wind_data(path_input_data, dpd, dpyn, ndpd, country_name, year, state_name = None, purpose = 'optim'):
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    points_in_world_path = os.path.join(base_dir, './optim_mix/grid_with_centroids_states.geojson')
-    points_in_world = gpd.read_file(points_in_world_path)
-    folder = path_input_data + f'/{country_name}'
-
-    if state_name : 
-        partie_name_file = f'grid_locations_averaged_wind_{country_name}_{state_name}_{year}.xlsx'
-    else: 
-        partie_name_file = f'grid_locations_averaged_wind_{country_name}_{year}.xlsx' 
-
-    chemin_pattern = os.path.join(folder, f'*{partie_name_file}*')
-    fichiers_trouves = glob.glob(chemin_pattern)
-
-    if len(fichiers_trouves)==0:
-        print('collecting data')
-        fetch_and_average_data_ren_ninja(country_name, 1, ['wind'], points_in_world, state = state_name, year=year, save = True, coordinates = mode)
-
-    fichiers_trouves = glob.glob(chemin_pattern)
-
-    file_name = fichiers_trouves[0].split('//',2)[-1]
-
-    if purpose == 'optim':
-        norm = None
-    elif purpose == 'wavelet':
-        norm = 'mean'
-    
-    Wind_ts = import_excel(path_input_data,file_name, 
-                                    dpd ,ndpd, dpy, 
-                                    interp=True, norm = norm) # interpolate data from dpd to ndpd numper of points per day
-
-    mean_wind = pd.read_excel(path_input_data+file_name).mean().iloc[0]
-    print(f'Série temporelle normalisée pour {purpose}: {norm}')
+    mean_wind = pd.read_excel(path_input_data+folder+file_name).mean().iloc[0]
 
     return Wind_ts, mean_wind

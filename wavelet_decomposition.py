@@ -4,20 +4,310 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import math
 import os
+from pathlib import Path
 import pickle as pkl
 from scipy import sparse
 from scipy.sparse.linalg import lsqr
 import xlsxwriter
 
-from calc_translations import translate
 
-'''
-This function generation a matric with square shape wavelets
-'''
+from calc_translations import translate
+from utilities import create_directory
+from file_manager import WaveletFileManager
+from calc_translations import calc_all_translations
+import config
+
+
+def create_directory(path):
+    """Create directory if it doesn't exist.
+    
+    Args:
+        path: Can be a file path or directory path.
+              If file path (contains '.'), creates parent directory.
+              If directory path, creates the directory.
+    """
+    # Determine if path is a file or directory
+    if '.' in os.path.basename(path):
+        # It's a file path, get the parent directory
+        directory = os.path.dirname(path)
+    else:
+        # It's a directory path
+        directory = path
+    
+    if directory and not os.path.exists(directory):
+        os.makedirs(directory, exist_ok=True)
+        print(f"    Created: {directory}")
+
+
+def wavelet_decomposition_single_TS(TS, year, country_name=None, signal_type=None,
+                                    multi_year=None, 
+                                    wl_shape='square',
+                                    recompute_translation=False,
+                                    imp_matrix=True,
+                                    dpd=24, dpy=365, 
+                                    ndpd=64, vy=6, vw=3, vd=6):
+    """
+    Perform wavelet decomposition on a single time series.
+    Uses config.py directories for file storage.
+    
+    Parameters
+    ----------
+    TS : array-like
+        Input time series data (should be ndpd * dpy points for single year)
+    year : str or int
+        Year identifier for this data
+    country_name : str, optional
+        Country/region name (default: 'France')
+    signal_type : str, optional
+        Signal type: 'PV', 'Wind', 'Consumption' (default: 'Unknown')
+    multi_year : list, optional
+        List of years if TS contains multiple stacked years
+    wl_shape : str, optional
+        Wavelet shape: 'square' or 'sine' (default: 'square')
+    recompute_translation : bool, optional
+        Force recomputation of translations (default: False)
+    imp_matrix : bool, optional
+        Import existing matrix if available (default: True)
+    dpd : int, optional
+        Original data points per day (default: 24)
+    dpy : int, optional
+        Days per year (default: 365)
+    ndpd : int, optional
+        Interpolated data points per day (default: 64)
+    vy : int, optional
+        Yearly wavelet levels (default: 6)
+    vw : int, optional
+        Weekly wavelet levels (default: 3)
+    vd : int, optional
+        Daily wavelet levels (default: 6)
+        
+    Returns
+    -------
+    trans_file : str
+        Path to translation file
+    matrix_files : list
+        List of matrix file paths
+    per_year_betas : dict
+        Dictionary of beta coefficients by year
+    """
+    
+    # =========================================================================
+    # 1. SETUP DEFAULTS
+    # =========================================================================
+    
+    if country_name is None:
+        country_name = 'France'
+    if signal_type is None:
+        signal_type = 'Unknown'
+    
+    # Years to process
+    if multi_year:
+        years = [str(y) for y in multi_year]
+    else:
+        years = [str(year)]
+    
+    print(f"\n{'='*70}")
+    print(f"WAVELET DECOMPOSITION - {signal_type} - {country_name}")
+    print(f"{'='*70}")
+    print(f"Years to process:   {years}")
+    print(f"Data length:        {len(TS)} points")
+    print(f"Expected per year:  {ndpd * dpy} points")
+    print(f"Wavelet Shape:      {wl_shape}")
+    print(f"Recompute Trans:    {recompute_translation}")
+    print(f"Import Matrix:      {imp_matrix}")
+    print(f"Parameters:         vy={vy}, vw={vw}, vd={vd}")
+    print(f"{'='*70}\n")
+    
+ # =========================================================================
+    # 2. INITIALIZE FILE MANAGER (controls ALL paths)
+    # =========================================================================
+    
+    file_mgr = WaveletFileManager(
+        base_dir=config.RESULTS_DIR,
+        region=country_name,
+        wl_shape=wl_shape,      # ← Add wavelet shape!
+        use_nested=True
+    )
+    # =========================================================================
+    # 3. GET ALL PATHS FROM FILE MANAGER
+    # =========================================================================
+    
+    # Translation paths (one per year) - MUST be a list!
+    trans_files = [file_mgr.get_translation_path(signal_type, year_str) 
+                   for year_str in years]
+    
+    # Matrix paths (one per year)
+    matrix_files = [file_mgr.get_matrix_path(year_str) 
+                    for year_str in years]
+    
+    # Beta paths (one per year)
+    beta_files = [file_mgr.get_betas_path(signal_type, year_str) 
+                  for year_str in years]
+    
+    # Get directories for display and creation
+    path_trans = os.path.dirname(trans_files[0])
+    matrix_dir = os.path.dirname(matrix_files[0])
+    beta_dir = os.path.dirname(beta_files[0])
+    
+    # =========================================================================
+    # 4. CREATE DIRECTORIES
+    # =========================================================================
+    
+    print(f"Creating directories...")
+    create_directory(path_trans)
+    create_directory(matrix_dir)
+    create_directory(beta_dir)
+    print(f"✅ Directories ready")
+    
+    print(f"\nPaths from FileManager:")
+    print(f"  Translation dir: {path_trans}")
+    print(f"  Matrix dir:      {matrix_dir}")
+    print(f"  Beta dir:        {beta_dir}")
+    print(f"  Trans files:     {[os.path.basename(f) for f in trans_files]}")
+    print(f"  Matrix files:    {[os.path.basename(f) for f in matrix_files]}\n")
+    
+    # =========================================================================
+    # 5. COMPUTE/LOAD TRANSLATIONS
+    # =========================================================================
+    
+    print("Processing translations...")
+    
+    # calc_all_translations receives list of paths
+    trans = calc_all_translations(
+        trans_files=trans_files,       # MUST be a list, not a string!
+        input_data=TS,
+        ndpd=ndpd,
+        dpy=dpy,
+        wl_shape=wl_shape,
+        recompute_translation=recompute_translation
+    )
+    
+    print(f"✅ Translations ready for {len(trans)} years\n")
+
+    # =========================================================================
+    # 6. COMPUTE WAVELET DECOMPOSITION
+    # =========================================================================
+    
+    print(f"Computing wavelet decomposition...")
+    
+    # Add trailing separator for path concatenation in compute_wavelet_coefficient_betas
+    matrix_dir_with_sep = matrix_dir + os.sep
+    beta_dir_with_sep = beta_dir + os.sep
+    
+    # Import here to avoid circular imports (if needed)
+    # The function should already be available in the same module
+    
+    stacked_betas, per_year_betas = compute_wavelet_coefficient_betas(
+        signal_in=TS,
+        vecNb_yr=vy,
+        vecNb_week=vw,
+        vecNb_day=vd,
+        dpy=dpy,
+        dpd=ndpd,
+        trans=trans,
+        path_matrix=matrix_dir_with_sep,
+        path_decomposition_results=beta_dir_with_sep,
+        wl_shape=wl_shape,
+        imp_matrix=imp_matrix,
+        years=years
+    )
+    
+    print(f"\n✅ Decomposition complete")
+    print(f"   Years processed: {list(per_year_betas.keys())}")
+    
+    # Validate structure
+    for year_str in years:
+        if year_str in per_year_betas:
+            n_scales = len(per_year_betas[year_str])
+            expected = vy + vw + vd + 1  # +1 for offset
+            status = "✅" if n_scales == expected else "⚠️"
+            print(f"   {status} Year {year_str}: {n_scales} time scales (expected {expected})")
+    
+    # =========================================================================
+    # 7. SAVE INDIVIDUAL BETA FILES
+    # =========================================================================
+    
+    print(f"\nSaving beta coefficients...")
+    for i, year_str in enumerate(years):
+        beta_file = beta_files[i]
+        with open(beta_file, 'wb') as f:
+            pkl.dump(per_year_betas[year_str], f)
+        print(f"   ✅ Saved: {os.path.basename(beta_file)}")
+    
+    # =========================================================================
+    # 8. SUMMARY
+    # =========================================================================
+    
+    print(f"\n{'='*70}")
+    print(f"✅ DECOMPOSITION COMPLETE")
+    print(f"{'='*70}")
+    print(f"Translation files:")
+    for tf in trans_files:
+        status = '✅' if os.path.exists(tf) else '❌'
+        print(f"  {status} {tf}")
+    print(f"\nMatrix files:")
+    for mf in matrix_files:
+        status = '✅' if os.path.exists(mf) else '❌'
+        print(f"  {status} {mf}")
+    print(f"\nBeta files:")
+    for bf in beta_files:
+        status = '✅' if os.path.exists(bf) else '❌'
+        print(f"  {status} {bf}")
+    print(f"{'='*70}\n")
+    
+    return trans_files, matrix_files, per_year_betas
+
+
+# =============================================================================
+# USAGE EXAMPLE
+# =============================================================================
+"""
+# Import required modules
+from wavelet_decomposition import wavelet_decomposition_single_TS
+import config
+
+# Extract single year of data
+year_to_process = '2012'
+ndpd = 64
+dpy = 365
+points_per_year = ndpd * dpy
+
+# Get index for the year
+year_index = years.index(year_to_process)
+start_idx = year_index * points_per_year
+end_idx = (year_index + 1) * points_per_year
+TS_single_year = PV_ts[start_idx:end_idx]
+
+# Run decomposition
+trans_file, matrix_files, results_betas = wavelet_decomposition_single_TS(
+    TS_single_year,
+    year=year_to_process,
+    multi_year=None,
+    country_name='France',
+    signal_type='PV',
+    wl_shape='square',
+    recompute_translation=False,
+    imp_matrix=True,
+    dpd=24,
+    ndpd=64,
+    vy=6,
+    vw=3,
+    vd=6
+)
+
+# Check results
+print(f"Results betas keys: {results_betas.keys()}")
+print(f"Number of time scales: {len(results_betas[year_to_process])}")
+"""
+
 def generate_square_wl_matrix(vecNb_yr, vecNb_week, vecNb_day, dpy, dpd,
                               trans_vec,
                               path_matrix, matrix_name,
                               import_matrix = True):
+    '''
+This function generation a matric with square shape wavelets
+'''
+
     #############
     # Translations
     #############
@@ -358,6 +648,60 @@ What it does:
     return df
 
 
+def reconstruct(time_scales, reconstructed_time_scales,
+                matrix, beta_sheet, title,
+                xmin=0, xmax=365,
+                dpy=365, dpd=64,
+                add_offset=True, plot = True):
+    '''
+    This function reconstruct time series for given time scales. It only workd for 1 year signals.
+    Takes as inputs :
+     - time_scales :  [0.75, 1.5, 3., 6., 12, 24., 42., 84., 168., 273.75, 547.5, 1095., 2190., 4380., 8760.] # cycles length, in hours
+     - reconstructed_time_scales : e.g. [24] if you want to reconstructa signal filtered with the daily wavelets
+     - matrix, square or sine, with the year
+     - beta_sheets : A one year list of betas ordered by time scales
+     - title : of the figure
+     - dpy : days per year. 365 default value
+     - dpd : data per day: 64 defauld value
+     - add_offset : If you want to add or remove the offset of the siganl
+    '''
+
+    #     time_scales = [0.75, 1.5, 3., 6., 12, 24., 42., 84., 168., 273.75, 547.5, 1095., 2190., 4380., 8760.] # cycles length, in hours
+    # reconstructed_time_scales = time_scales
+    # Concat time scales
+    concat_betas = []
+    for i, ts in enumerate(time_scales):
+        if ts in reconstructed_time_scales:
+            concat_betas.extend(beta_sheet[i])
+        else:
+            # print(concat_betas)
+            concat_betas.extend([0.] * len(beta_sheet[i]))
+
+    if add_offset:
+        concat_betas.extend(beta_sheet[-1])
+    else:
+        concat_betas.extend([0.])
+
+    # PLots options
+    if plot :
+        sns.set()
+        sns.set_context("notebook", font_scale=1.5, rc={"lines.linewidth": 2.})
+        sns.set_style("darkgrid", {"axes.facecolor": ".9"})
+        sns.set_palette("colorblind")  # set colors palettte
+        #
+        time = np.linspace(0, dpy, dpy * dpd)
+        fig = plt.figure()
+        fig.set_size_inches(10, 8)
+        plt.plot(time, np.dot(matrix, concat_betas[::-1]))
+        plt.xlim(xmin, xmax)
+        plt.xlabel('Days')
+        plt.ylabel('Power')
+        plt.title(title)
+    #     plt.show()
+
+    return np.dot(matrix, concat_betas[::-1] )
+
+
 def stack_betas(saved_sheets, time_series, chosen_years):
     '''
     This function returns stacked betas for chosen number of years
@@ -382,56 +726,7 @@ def stack_betas(saved_sheets, time_series, chosen_years):
     return stacked_betas
 
 
-def reconstruct(time_scales, reconstructed_time_scales,
-                matrix, beta_sheet, title,
-                xmin=0, xmax=365,
-                dpy=365, dpd=64,
-                add_offset=True):
-    '''
-    This function reconstruct time series for given time scales. It only workd for 1 year signals.
-    Takes as inputs :
-     - time_scales :  [0.75, 1.5, 3., 6., 12, 24., 42., 84., 168., 273.75, 547.5, 1095., 2190., 4380., 8760.] # cycles length, in hours
-     - reconstructed_time_scales : e.g. [24] if you want to reconstructa signal filtered with the daily wavelets
-     - matrix, square or sine, with the year
-     - beta_sheets : A one year list of betas ordered by time scales
-     - title : of the figure
-     - dpy : days per year. 365 default value
-     - dpd : data per day: 64 defauld value
-     - add_offset : If you want to add or remove the offset of the siganl
-    '''
 
-    #     time_scales = [0.75, 1.5, 3., 6., 12, 24., 42., 84., 168., 273.75, 547.5, 1095., 2190., 4380., 8760.] # cycles length, in hours
-    # reconstructed_time_scales = time_scales
-    # Concat time scales
-    concat_betas = []
-    for i, ts in enumerate(time_scales):
-        if ts in reconstructed_time_scales:
-            concat_betas.extend(beta_sheet[i])
-        else:
-            concat_betas.extend([0.] * len(beta_sheet[i]))
-
-    if add_offset:
-        concat_betas.extend(beta_sheet[-1])
-    else:
-        concat_betas.extend([0.])
-
-    # PLots options
-    sns.set()
-    sns.set_context("notebook", font_scale=1.5, rc={"lines.linewidth": 2.})
-    sns.set_style("darkgrid", {"axes.facecolor": ".9"})
-    sns.set_palette("colorblind")  # set colors palettte
-    #
-    time = np.linspace(0, dpy, dpy * dpd)
-    fig = plt.figure()
-    fig.set_size_inches(10, 8)
-    plt.plot(time, np.dot(matrix, concat_betas[::-1]))
-    plt.xlim(xmin, xmax)
-    plt.xlabel('Days')
-    plt.ylabel('Power')
-    plt.title(title)
-#     plt.show()
-
-    return np.dot(matrix, concat_betas[::-1] )
 def reconstruct_per_ts(A, trans, signal, do_trans, add_offset=False):
     '''
     This function proceed to a wavelet decomposition of an input signal for each time scales
@@ -475,3 +770,148 @@ def reconstruct_per_ts(A, trans, signal, do_trans, add_offset=False):
             #reconstructed_signal[c] =  interpolate(reconstruct_signal(A, beta, use_beta, do_trans, trans), time_scale[::-1][i], dpd, Nyears_signal)[0]
         c = c + 1
     return reconstructed_signal
+
+def compute_wavelet_coefficient_betas(signal_in,
+                 vecNb_yr, vecNb_week, vecNb_day, dpy, dpd,
+                 trans,
+                 path_matrix,
+                 path_decomposition_results, wl_shape, imp_matrix = True,
+                  years = None ):
+    '''
+    This function:
+    - Compute the wavelet coefficients (named betas).
+    - Reshape betas from a 1D-array to a dictionnary with N (15) time scales rows
+    - Translate in the othert directions the beta
+    - Export in an excel document with different sheets
+    - Concatenate all years in a signle sheet
+    - Export concatenated betas in a disctionnary, with input signals as jeys of the dictionnary
+    - wl_shape : takes 2 values, either square ore sine
+    - years is a list of year of the input time serie. For istance ['2017' , '2018']
+      if years = None, it would be replaced by years = ['0', '1']
+
+    It returns :
+    - 2 Excel files in the directory ath_decomposition_results :
+        * The first gives all decompositions coefficients (names betas) stacked per time sclale. Rhus, if the input data last 2 years, there is two coefficient for the time scale 'year'.
+        * The second excel file returns the results of each year decomposition in a different sheet.
+
+    - Results array...
+    '''
+
+    create_directory(path_decomposition_results)
+    #
+    signal_length = len(signal_in)
+    assert (signal_length % (dpy * dpd) == 0), 'The signal length is not an integer number of years.'
+
+    N_years = int(signal_length/(dpy * dpd))
+    if years is None:
+        years = [str(y) for y in range(N_years)] 
+
+    workbook2 = xlsxwriter.Workbook(path_decomposition_results + 'results_betas_stacked.xlsx') #The results of the decomposition of each year are stacked in this sheet. 
+
+# 1) ----- Compute betas for a given input signal -------
+# -------- returns a 1D array with N years stacked
+    betas = []
+    for i, year in enumerate(years):
+        #print(i,year)
+        matrix_name = "A_"+ year + ".npz"
+        # print(path_matrix + matrix_name)
+        if wl_shape == 'square':
+            # print(trans)
+            A_sparse = generate_square_wl_matrix(vecNb_yr, vecNb_week, vecNb_day, dpy, dpd,
+                                                trans[i],
+                                                path_matrix, matrix_name,
+                                                import_matrix = imp_matrix)
+            print('Square sparsee matrix on year '+ year +' has been imported')
+        elif wl_shape == 'sine':
+            A_sparse = generate_sine_wl_matrix(vecNb_yr, vecNb_week, vecNb_day, dpy, dpd,
+                                                trans[i],
+                                                path_matrix, matrix_name,
+                                                import_matrix = imp_matrix)
+            print('Sine sparse matrix on year '+ year +' has been imported')
+        else:
+            print('The type of wavelet is not defined. Please type "square" or "sine"')
+
+        start_index = int(signal_length/N_years*i)
+        end_index = int(signal_length/N_years*(i+1))
+        betas.append(perform_wavelet_decomposition(A_sparse, signal_in[start_index:end_index]) )
+
+    #
+    # -------- Open Excel file ----------
+    workbook = xlsxwriter.Workbook(path_decomposition_results + 'results_per_year_betas.xlsx')
+    row = 0
+    per_year_betas = {}
+#
+# 2) ----- Reshape betas in a list of 16 time scales -------
+# -------- Time scales icludes the offset value
+    for i,beta in enumerate(betas):
+        per_year_betas[years[i]] = []
+
+        worksheet = workbook.add_worksheet(str(years[i]))
+
+        # -- Initialization --
+        len_max = dpy *(2**vecNb_day-1)
+        newsize = dpy *(2**vecNb_day-1)
+        total_vec = vecNb_day+vecNb_week+vecNb_yr # number of time scales
+        sheet = []
+
+        beta_offset =[beta[0]]
+        beta_year = beta[1 : 1+ 2**vecNb_yr-1] # all betas comming from the yearly motheer wavelet
+        beta_week = beta[1+ 2**vecNb_yr - 1: 1+ 2**vecNb_yr-1 + 52*(2**vecNb_week-1)]
+        beta_day = beta[ 1+ 2**vecNb_yr-1 + 52*(2**vecNb_week-1):  1+ 2**vecNb_yr-1 + 52*(2**vecNb_week-1) + dpy * (2**vecNb_day-1)]
+        #
+
+        sheet.append(beta_offset)
+        # --- Year vec ------
+        for k in range(vecNb_yr):
+            sheet.append(beta_year[2 ** k - 1: 2 ** (k + 1) - 1].tolist())
+        # --- Week vec ------
+        for k in range(vecNb_week):
+            sheet.append(beta_week[52 * (2 ** k - 1): 52 * (2 ** (k + 1) - 1)].tolist())
+        # --- Day vec ------
+        for k in range(vecNb_day):
+            sheet.append(beta_day[dpy * (2 ** k - 1):dpy * (2 ** (k + 1) - 1)].tolist())
+
+
+        # Reverse the list order
+        sheet = [sh[::-1] for sh in reversed(sheet) ]
+
+        per_year_betas[years[i]] = sheet
+
+        for col, data in enumerate(sheet):
+            worksheet.write_column(row, col, data)
+
+        if len(per_year_betas[years[i]][-1])>1:
+            print('error1')
+
+    workbook.close()
+#
+# 3) ----- Stack all betas in a 16 dimensions time scale list  -------
+
+    worksheet2 = workbook2.add_worksheet('Wavelet decomposition results')
+    row = 0
+    # Initialization
+    stacked_sheet = [None] * len(per_year_betas[years[0]])
+
+    for ts in range(len(stacked_sheet)):
+        tmp = []
+        for i in range(len(years)):
+            tmp.extend(per_year_betas[years[i]][ts])
+
+        stacked_sheet[ts] = tmp
+
+    for col, data in enumerate(stacked_sheet):
+        worksheet2.write_column(row, col, data)
+
+    stacked_betas = stacked_sheet
+    #
+    workbook2.close()
+
+    return stacked_betas, per_year_betas
+
+def perform_wavelet_decomposition(A_sparse, signal_in):
+    # A_sparse = sparse.csr_matrix(A)
+    beta_lsqr = lsqr(A_sparse, signal_in, damp=0.001, atol=0, btol=0, conlim=0)[0]
+    # Damping coefficient has to be smaller than 0.1. when damp gets big, we loose the reconstruction ( from damp=0.1). When too small, we loose linearity
+    return beta_lsqr
+
+
