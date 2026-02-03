@@ -697,7 +697,7 @@ def reconstruct(time_scales, reconstructed_time_scales,
         plt.xlabel('Days')
         plt.ylabel('Power')
         plt.title(title)
-    #     plt.show()
+        plt.show()
 
     return np.dot(matrix, concat_betas[::-1] )
 

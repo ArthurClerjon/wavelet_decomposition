@@ -294,12 +294,9 @@ def plot_betas_heatmap(
 
     plt.ylim(len(reconstructed_time_scales), 0)
     fig.tight_layout()
-    plt.show(block=False)
-    plt.pause(3)
-    plt.close()
-    
+  
     print(f"✅ Heatmap displayed for {signal_type} - {year}")
-
+    return fig
 
 def fft(ndpd, dpy, signal_type, year, input_data):
     """
@@ -372,14 +369,7 @@ def fft(ndpd, dpy, signal_type, year, input_data):
     plt.xticks(xcoords,ylabel)
     plt.show(block=False)
     
-    # =========================================================================
-    # FINALIZE - Matches heatmap
-    # =========================================================================
-    
-    fig.tight_layout()
-    plt.show(block=False)
-    plt.pause(3)
-    plt.close()
+    return fig
 
 
 def plot_EPN(emax, pmax, n, uf, serv, time_scales, satisfactions, scenario_name):
