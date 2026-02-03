@@ -4,6 +4,8 @@ Wavelet Decomposition Analysis Interface
 Interactive Streamlit app for analyzing time series using wavelet decomposition.
 
 Based on the Clerjon & Perdu (2019) methodology.
+
+COMPLETE VERSION WITH ALL IMPROVEMENTS APPLIED
 """
 
 import streamlit as st
@@ -14,11 +16,13 @@ from scipy import sparse
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import os
+import io
+import sys
 
 # Import custom modules
 from file_manager import WaveletFileManager
 from wavelet_decomposition import wavelet_decomposition_single_TS, reconstruct
-from plots import plot_betas_heatmap
+from plots import plot_betas_heatmap, fft
 from import_excel import import_excel
 
 # ============================================================================
@@ -264,114 +268,253 @@ if 'data_imported' in st.session_state and st.session_state['data_imported']:
     st.session_state['wavelet_shape'] = wavelet_shape
     
     # ========================================================================
-    # VISUALIZATION WITH PLOTLY
+    # VISUALIZATION WITH PLOTLY - IMPROVED
     # ========================================================================
     
     st.markdown("### 📊 Time Series Visualization")
     
-    # Select signals to plot
-    signals_to_plot = st.multiselect(
-        "Select signals to visualize (side-by-side)",
-        options=['Consumption', 'Wind', 'PV'],
-        default=[signal_type],
-        help="Choose one or more signals to compare"
+    # Layout and signal selection
+    col_layout, col_signals = st.columns([1, 3])
+    
+    with col_layout:
+        plot_layout = st.radio(
+            "Plot layout",
+            options=["Combined", "Subplots"],
+            help="Combined: All signals on same plot. Subplots: Each signal separate."
+        )
+    
+    with col_signals:
+        # Select signals to plot
+        signals_to_plot = st.multiselect(
+            "Select signals to visualize",
+            options=['Consumption', 'Wind', 'PV'],
+            default=[signal_type],
+            help="Choose one or more signals to compare"
+        )
+    
+    # Year selection for plotting
+    years_to_plot = st.multiselect(
+        "Select years to plot",
+        options=st.session_state['years'],
+        default=[year_to_process],
+        help="Choose one or more years. Each year will be shown as a separate line."
     )
     
-    if signals_to_plot and st.button("📈 Plot Time Series"):
+    if signals_to_plot and years_to_plot and st.button("📈 Plot Time Series"):
         with st.spinner("Generating plots..."):
             try:
-                # Extract data for selected year
-                years_available = st.session_state['years']
-                year_index = years_available.index(year_to_process)
-                points_per_year = st.session_state['signal_length']
-                start_idx = year_index * points_per_year
-                end_idx = (year_index + 1) * points_per_year
-                
                 # Create time axis (in days)
+                points_per_year = st.session_state['signal_length']
                 time_axis = np.linspace(0, st.session_state['dpy'], points_per_year)
                 
-                # Determine subplot layout
-                n_plots = len(signals_to_plot)
-                
-                # Create subplots
-                fig = make_subplots(
-                    rows=1, 
-                    cols=n_plots,
-                    subplot_titles=[f"{sig} ({year_to_process})" for sig in signals_to_plot],
-                    horizontal_spacing=0.05
-                )
-                
-                # Color scheme
-                colors = {
+                # Color scheme for signals
+                signal_colors = {
                     'Consumption': '#2E86AB',
                     'Wind': '#A23B72',
                     'PV': '#F18F01'
                 }
                 
-                # Add each signal to subplots
-                for i, sig in enumerate(signals_to_plot, 1):
-                    signal_data = st.session_state['stacked_input_data'][sig][start_idx:end_idx]
+                # Line styles for years
+                line_styles = ['solid', 'dash', 'dot', 'dashdot']
+                
+                if plot_layout == "Combined":
+                    # ====================================================
+                    # COMBINED PLOT - All signals and years on same axes
+                    # ====================================================
+                    fig = go.Figure()
                     
-                    fig.add_trace(
-                        go.Scatter(
-                            x=time_axis,
-                            y=signal_data,
-                            mode='lines',
-                            name=sig,
-                            line=dict(color=colors.get(sig, '#333333'), width=1.5),
-                            showlegend=(i == 1)  # Only show legend for first plot
-                        ),
-                        row=1, 
-                        col=i
+                    for sig in signals_to_plot:
+                        for year_idx, year in enumerate(years_to_plot):
+                            # Extract data for this year
+                            years_available = st.session_state['years']
+                            year_index = years_available.index(year)
+                            start_idx = year_index * points_per_year
+                            end_idx = (year_index + 1) * points_per_year
+                            signal_data = st.session_state['stacked_input_data'][sig][start_idx:end_idx]
+                            
+                            # Create legend name
+                            legend_name = f"{sig} ({year})" if len(years_to_plot) > 1 else sig
+                            
+                            fig.add_trace(
+                                go.Scatter(
+                                    x=time_axis,
+                                    y=signal_data,
+                                    mode='lines',
+                                    name=legend_name,
+                                    line=dict(
+                                        color=signal_colors.get(sig, '#333333'),
+                                        width=1.5,
+                                        dash=line_styles[year_idx % len(line_styles)]
+                                    )
+                                )
+                            )
+                    
+                    fig.update_layout(
+                        title=f"Time Series - {country_name} ({', '.join(years_to_plot)})",
+                        xaxis_title="Time (days)",
+                        yaxis_title="Normalized Power (MW)",
+                        height=500,
+                        showlegend=True,
+                        hovermode='x unified',
+                        template='plotly_white'
                     )
                     
-                    # Update axes for each subplot
-                    fig.update_xaxes(title_text="Time (days)", row=1, col=i)
-                    fig.update_yaxes(title_text="Normalized Power (MW)", row=1, col=i)
+                    st.plotly_chart(fig, use_container_width=True)
                 
-                # Update layout
-                fig.update_layout(
-                    height=500,
-                    showlegend=True,
-                    hovermode='x unified',
-                    template='plotly_white',
-                    title_text=f"Time Series Comparison - {year_to_process}",
-                    title_x=0.5
-                )
-                
-                # Display the plot
-                st.plotly_chart(fig, use_container_width=True)
-                
-                # Show statistics
-                st.markdown("#### 📊 Signal Statistics")
-                stats_cols = st.columns(len(signals_to_plot))
-                
-                for i, sig in enumerate(signals_to_plot):
-                    signal_data = st.session_state['stacked_input_data'][sig][start_idx:end_idx]
-                    with stats_cols[i]:
-                        st.markdown(f"**{sig}**")
-                        st.metric("Mean", f"{np.mean(signal_data):.3f} MW")
-                        st.metric("Std Dev", f"{np.std(signal_data):.3f} MW")
-                        st.metric("Max", f"{np.max(signal_data):.3f} MW")
-                        st.metric("Min", f"{np.min(signal_data):.3f} MW")
+                else:
+                    # ====================================================
+                    # SUBPLOTS - Each signal separate, all years in each
+                    # ====================================================
+                    n_plots = len(signals_to_plot)
+                    
+                    fig = make_subplots(
+                        rows=1, 
+                        cols=n_plots,
+                        subplot_titles=[f"{sig} - {country_name}" for sig in signals_to_plot],
+                        horizontal_spacing=0.05
+                    )
+                    
+                    for col_idx, sig in enumerate(signals_to_plot, 1):
+                        for year_idx, year in enumerate(years_to_plot):
+                            # Extract data for this year
+                            years_available = st.session_state['years']
+                            year_index = years_available.index(year)
+                            start_idx = year_index * points_per_year
+                            end_idx = (year_index + 1) * points_per_year
+                            signal_data = st.session_state['stacked_input_data'][sig][start_idx:end_idx]
+                            
+                            # Create legend name
+                            legend_name = f"{sig} ({year})"
+                            
+                            fig.add_trace(
+                                go.Scatter(
+                                    x=time_axis,
+                                    y=signal_data,
+                                    mode='lines',
+                                    name=legend_name,
+                                    line=dict(
+                                        color=signal_colors.get(sig, '#333333'),
+                                        width=1.5,
+                                        dash=line_styles[year_idx % len(line_styles)]
+                                    ),
+                                    showlegend=(col_idx == 1)  # Only show legend for first subplot
+                                ),
+                                row=1, 
+                                col=col_idx
+                            )
+                        
+                        # Update axes for each subplot
+                        fig.update_xaxes(title_text="Time (days)", row=1, col=col_idx)
+                        fig.update_yaxes(title_text="Normalized Power (MW)", row=1, col=col_idx)
+                    
+                    fig.update_layout(
+                        height=500,
+                        showlegend=True,
+                        hovermode='x unified',
+                        template='plotly_white'
+                    )
+                    
+                    st.plotly_chart(fig, use_container_width=True)
                 
             except Exception as e:
                 st.error(f"❌ Error plotting time series: {str(e)}")
                 st.exception(e)
     
     # ============================================================================
-    # STEP 3: RUN DECOMPOSITION (REMOVED PARAMETERS - FIXED AT 15 SCALES)
+    # STEP 3: RUN DECOMPOSITION WITH DETAILED INFO
     # ============================================================================
     
     st.markdown('<div class="section-header">🚀 Step 3: Run Wavelet Decomposition</div>', unsafe_allow_html=True)
     
     st.markdown("""
-    The decomposition uses **15 time scales** (fixed) spanning from 0.75h to 8760h (1 year).
+    ### About Wavelet Decomposition
     
-    **Time scales:** 0.75h, 1.5h, 3h, 6h, 12h, 24h, 42h, 84h, 168h, 273.75h, 547.5h, 1095h, 2190h, 4380h, 8760h
+    This implementation follows the methodology from **Clerjon & Perdu (2019)** published in 
+    *Energy & Environmental Science*: *"Matching intermittency and electricity storage characteristics 
+    through time scale analysis: an energy return on investment comparison"*.
+    
+    #### Time Scale Structure
+    
+    The decomposition uses **15 fixed time scales** optimally distributed across three frequency bands:
     """)
     
-    # Fixed parameters for 15 time scales
+    # Create visual display of time scales
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.markdown("""
+        **🕐 Daily Wavelets (6 scales)**
+        - 0.75h (45 min)
+        - 1.5h (90 min)
+        - 3h
+        - 6h
+        - 12h (half-day)
+        - 24h (day)
+        
+        *Captures: Intra-day variations, demand peaks, solar cycles*
+        """)
+    
+    with col2:
+        st.markdown("""
+        **📅 Weekly Wavelets (3 scales)**
+        - 42h
+        - 84h (3.5 days)
+        - 168h (week)
+        
+        *Captures: Weekly patterns, workday/weekend cycles, weather systems*
+        """)
+    
+    with col3:
+        st.markdown("""
+        **🌍 Yearly Wavelets (6 scales)**
+        - 273.75h (~11 days)
+        - 547.5h (~23 days)
+        - 1095h (~45 days)
+        - 2190h (~91 days)
+        - 4380h (~6 months)
+        - 8760h (year)
+        
+        *Captures: Seasonal patterns, annual trends*
+        """)
+    
+    st.markdown("""
+    #### Mathematical Foundation
+    
+    The decomposition uses **square wavelets** by default (or sine wavelets if selected), which are:
+    - **Orthogonal**: Each time scale is independent
+    - **Additive**: Signal = sum of all components
+    - **Reversible**: Perfect reconstruction possible
+    
+    #### Decomposition Process
+    
+    1. **Translation Optimization** (optional)
+       - Finds optimal circular shift for each wavelet
+       - Maximizes correlation with signal
+       - Cached for reuse
+    
+    2. **Matrix Generation**
+       - Creates sparse wavelet transformation matrix
+       - Dimensions: (signal_length × number_of_wavelets)
+       - Stored as compressed .npz file
+    
+    3. **Coefficient Calculation**
+       - Solves: Signal = Matrix × Betas
+       - Uses least-squares solver (LSQR algorithm)
+       - Betas represent amplitude at each time scale
+    
+    4. **Result Storage**
+       - Files saved in: `results/{region}/{shape}/`
+       - Enables fast reanalysis without recomputation
+    
+    #### Why These Specific Parameters?
+    
+    - **vy=6**: Optimal coverage of seasonal-to-annual scales
+    - **vw=3**: Captures weekly and multi-day patterns
+    - **vd=6**: Fine resolution for sub-daily dynamics
+    - **Total=15**: Balance between resolution and computation time
+    """)
+    
+    # Fixed parameters display
     vy = 6  # Yearly wavelets
     vw = 3  # Weekly wavelets
     vd = 6  # Daily wavelets
@@ -381,24 +524,35 @@ if 'data_imported' in st.session_state and st.session_state['data_imported']:
     
     st.markdown(f"""
     <div class="info-box">
-    <b>Decomposition parameters (fixed):</b><br>
-    - Yearly wavelets: {vy}<br>
-    - Weekly wavelets: {vw}<br>
-    - Daily wavelets: {vd}<br>
+    <b>Current Configuration:</b><br>
+    - Yearly wavelets: {vy} (scales: 273.75h - 8760h)<br>
+    - Weekly wavelets: {vw} (scales: 42h - 168h)<br>
+    - Daily wavelets: {vd} (scales: 0.75h - 24h)<br>
     - Total time scales: {len(time_scales)}<br>
-    - Wavelet shape: {wavelet_shape}
+    - Wavelet shape: <b>{wavelet_shape}</b><br>
+    - Signal resolution: {st.session_state['ndpd']} points/day<br>
+    - Total data points: {st.session_state['signal_length']:,}
     </div>
     """, unsafe_allow_html=True)
     
     recompute_translation = st.checkbox(
         "Recompute translations",
         value=False,
-        help="If checked, recompute optimal translations (slower). Otherwise, load existing translations."
+        help="If checked, recompute optimal translations (slower, ~1-2 min extra). Otherwise, load cached translations (<5 sec)."
     )
     
     if st.button("🚀 Run Wavelet Decomposition", type="primary"):
+        
+        # Create containers for progress display
+        progress_container = st.container()
+        log_container = st.container()
+        
         with st.spinner(f"Running wavelet decomposition for {signal_type} signal in {year_to_process}..."):
             try:
+                # Capture print outputs to display progress
+                old_stdout = sys.stdout
+                sys.stdout = buffer = io.StringIO()
+                
                 # Extract single year data
                 years_available = st.session_state['years']
                 year_index = years_available.index(year_to_process)
@@ -424,6 +578,16 @@ if 'data_imported' in st.session_state and st.session_state['data_imported']:
                     vd=vd
                 )
                 
+                # Restore stdout and get captured output
+                sys.stdout = old_stdout
+                output = buffer.getvalue()
+                
+                # Display captured progress log
+                if output:
+                    with log_container:
+                        with st.expander("📋 View Decomposition Log", expanded=True):
+                            st.code(output, language="text")
+                
                 # Store results in session state
                 st.session_state['decomposition_done'] = True
                 st.session_state['trans_file'] = trans_file
@@ -434,19 +598,33 @@ if 'data_imported' in st.session_state and st.session_state['data_imported']:
                 st.session_state['vd'] = vd
                 st.session_state['time_scales'] = time_scales
                 
+                # Success message with details
                 st.markdown(f"""
                 <div class="success-box">
-                ✅ <b>Decomposition complete!</b><br>
-                - Translation file: {trans_file}<br>
-                - Matrix file: {matrix_files[0]}<br>
-                - Betas computed for {year_to_process}<br>
-                - Time scales: 15 (from 0.75h to 8760h)
+                ✅ <b>Decomposition Complete!</b><br><br>
+                <b>Output Files:</b><br>
+                • Translation: <code>{trans_file}</code><br>
+                • Matrix: <code>{matrix_files[0]}</code><br>
+                • Coefficients: Betas computed for {year_to_process}<br><br>
+                <b>Results:</b><br>
+                • {len(time_scales)} time scales analyzed<br>
+                • {len(results_betas[year_to_process])} coefficient sets<br>
+                • Ready for visualization and reconstruction
                 </div>
                 """, unsafe_allow_html=True)
                 
             except Exception as e:
+                # Restore stdout in case of error
+                sys.stdout = old_stdout
                 st.error(f"❌ Error during decomposition: {str(e)}")
                 st.exception(e)
+                
+                # Show partial log if available
+                if 'buffer' in locals():
+                    output = buffer.getvalue()
+                    if output:
+                        with st.expander("📋 Partial Log (before error)"):
+                            st.code(output, language="text")
 
 # ============================================================================
 # STEP 4: VISUALIZATION OPTIONS WITH 15 CHECKBOXES
@@ -495,28 +673,28 @@ if 'decomposition_done' in st.session_state and st.session_state['decomposition_
                 ccenter = None
         
         # ====================================================================
-        # TIME SCALE SELECTION WITH 15 CHECKBOXES
+        # TIME SCALE SELECTION WITH 15 CHECKBOXES (SINGLE LINE)
         # ====================================================================
         
         st.markdown("#### Select Time Scales to Display")
         
-        # Define all 15 time scales with labels
+        # Time scale info (shortened labels for single line)
         time_scale_info = {
-            0.75: "0.75h (45 min)",
-            1.5: "1.5h (90 min)",
-            3.0: "3h",
-            6.0: "6h",
-            12.0: "12h (half-day)",
-            24.0: "24h (day)",
-            42.0: "42h",
-            84.0: "84h (3.5 days)",
-            168.0: "168h (week)",
-            273.75: "273.75h (~11 days)",
-            547.5: "547.5h (~23 days)",
-            1095.0: "1095h (~45 days)",
-            2190.0: "2190h (~91 days)",
-            4380.0: "4380h (~6 months)",
-            8760.0: "8760h (year)"
+            0.75: "0.75h", 
+            1.5: "1.5h", 
+            3.0: "3h", 
+            6.0: "6h", 
+            12.0: "12h", 
+            24.0: "24h",
+            42.0: "42h", 
+            84.0: "84h", 
+            168.0: "168h", 
+            273.75: "273.75h", 
+            547.5: "547.5h",
+            1095.0: "1095h", 
+            2190.0: "2190h", 
+            4380.0: "4380h", 
+            8760.0: "8760h"
         }
         
         # Initialize session state for checkboxes if not exists
@@ -527,54 +705,32 @@ if 'decomposition_done' in st.session_state and st.session_state['decomposition_
         col_btn1, col_btn2, col_spacer = st.columns([1, 1, 3])
         
         with col_btn1:
-            if st.button("✅ Select All", key="select_all"):
+            if st.button("✅ Select All", key="select_all_viz"):
+                # Update all checkboxes to True
                 for ts in st.session_state['time_scales']:
                     st.session_state['time_scale_checkboxes'][ts] = True
                 st.rerun()
         
         with col_btn2:
-            if st.button("❌ Deselect All", key="deselect_all"):
+            if st.button("❌ Deselect All", key="deselect_all_viz"):
+                # Update all checkboxes to False
                 for ts in st.session_state['time_scales']:
                     st.session_state['time_scale_checkboxes'][ts] = False
                 st.rerun()
         
         st.markdown("---")
+        st.markdown("**All Time Scales:**")
         
-        # Group time scales by category
-        st.markdown("**🕐 Sub-daily scales (< 24h):**")
-        subdaily_cols = st.columns(6)
-        subdaily_scales = [0.75, 1.5, 3.0, 6.0, 12.0, 24.0]
+        # All 15 checkboxes on a single line
+        checkbox_cols = st.columns(15)
         
-        for i, ts in enumerate(subdaily_scales):
-            with subdaily_cols[i]:
+        for i, ts in enumerate(st.session_state['time_scales']):
+            with checkbox_cols[i]:
                 st.session_state['time_scale_checkboxes'][ts] = st.checkbox(
-                    time_scale_info[ts], 
+                    time_scale_info[ts],
                     value=st.session_state['time_scale_checkboxes'].get(ts, True),
-                    key=f"ts_viz_{ts}"
-                )
-        
-        st.markdown("**📅 Weekly to monthly scales (1-45 days):**")
-        weekly_cols = st.columns(5)
-        weekly_scales = [42.0, 84.0, 168.0, 273.75, 547.5]
-        
-        for i, ts in enumerate(weekly_scales):
-            with weekly_cols[i]:
-                st.session_state['time_scale_checkboxes'][ts] = st.checkbox(
-                    time_scale_info[ts], 
-                    value=st.session_state['time_scale_checkboxes'].get(ts, True),
-                    key=f"ts_viz_{ts}"
-                )
-        
-        st.markdown("**🌍 Seasonal to annual scales (> 45 days):**")
-        seasonal_cols = st.columns(4)
-        seasonal_scales = [1095.0, 2190.0, 4380.0, 8760.0]
-        
-        for i, ts in enumerate(seasonal_scales):
-            with seasonal_cols[i]:
-                st.session_state['time_scale_checkboxes'][ts] = st.checkbox(
-                    time_scale_info[ts], 
-                    value=st.session_state['time_scale_checkboxes'].get(ts, True),
-                    key=f"ts_viz_{ts}"
+                    key=f"ts_viz_{ts}",
+                    label_visibility="visible"
                 )
         
         # Get selected time scales
@@ -583,6 +739,7 @@ if 'decomposition_done' in st.session_state and st.session_state['decomposition_
             if st.session_state['time_scale_checkboxes'].get(ts, True)
         ]
         
+        # Display selection count
         if selected_time_scales_viz:
             st.info(f"✅ Selected {len(selected_time_scales_viz)} time scales for heatmap")
         else:
@@ -590,9 +747,6 @@ if 'decomposition_done' in st.session_state and st.session_state['decomposition_
     
     # Generate visualizations
     if st.button("📊 Generate Visualizations"):
-        
-        # Import fft function
-        from plots import fft
         
         # Plot heatmap
         if plot_heatmap and selected_time_scales_viz:
@@ -641,7 +795,6 @@ if 'decomposition_done' in st.session_state and st.session_state['decomposition_
                     
                     input_data = st.session_state['stacked_input_data'][st.session_state['signal_type']][start_idx:end_idx]
                     
-                    # Modified fft call - create figure and display
                     fig = fft(
                         ndpd=st.session_state['ndpd'],
                         dpy=st.session_state['dpy'],
@@ -650,8 +803,7 @@ if 'decomposition_done' in st.session_state and st.session_state['decomposition_
                         input_data=input_data
                     )
                     
-                    # Note: fft function needs to be modified to return fig
-                    # For now, it will display via plt.show() internally
+                    st.pyplot(fig)
                     st.success("✅ FFT spectrum generated!")
                     
                 except Exception as e:
@@ -674,23 +826,23 @@ if 'decomposition_done' in st.session_state and st.session_state['decomposition_
     # Time scale selection for reconstruction
     st.markdown("#### Select Time Scales for Reconstruction")
     
-    # Define all 15 time scales with labels
+    # Time scale info (shortened labels for single line)
     time_scale_info = {
-        0.75: "0.75h (45 min)",
-        1.5: "1.5h (90 min)",
-        3.0: "3h",
-        6.0: "6h",
-        12.0: "12h (half-day)",
-        24.0: "24h (day)",
-        42.0: "42h",
-        84.0: "84h (3.5 days)",
-        168.0: "168h (week)",
-        273.75: "273.75h (~11 days)",
-        547.5: "547.5h (~23 days)",
-        1095.0: "1095h (~45 days)",
-        2190.0: "2190h (~91 days)",
-        4380.0: "4380h (~6 months)",
-        8760.0: "8760h (year)"
+        0.75: "0.75h", 
+        1.5: "1.5h", 
+        3.0: "3h", 
+        6.0: "6h", 
+        12.0: "12h", 
+        24.0: "24h",
+        42.0: "42h", 
+        84.0: "84h", 
+        168.0: "168h", 
+        273.75: "273.75h", 
+        547.5: "547.5h",
+        1095.0: "1095h", 
+        2190.0: "2190h", 
+        4380.0: "4380h", 
+        8760.0: "8760h"
     }
     
     # Initialize session state for reconstruction checkboxes if not exists
@@ -713,42 +865,18 @@ if 'decomposition_done' in st.session_state and st.session_state['decomposition_
             st.rerun()
     
     st.markdown("---")
+    st.markdown("**All Time Scales:**")
     
-    # Group time scales by category
-    st.markdown("**🕐 Sub-daily scales (< 24h):**")
-    subdaily_cols = st.columns(6)
-    subdaily_scales = [0.75, 1.5, 3.0, 6.0, 12.0, 24.0]
+    # All 15 checkboxes on a single line
+    checkbox_cols = st.columns(15)
     
-    for i, ts in enumerate(subdaily_scales):
-        with subdaily_cols[i]:
+    for i, ts in enumerate(st.session_state['time_scales']):
+        with checkbox_cols[i]:
             st.session_state['reconstruction_checkboxes'][ts] = st.checkbox(
-                time_scale_info[ts], 
+                time_scale_info[ts],
                 value=st.session_state['reconstruction_checkboxes'].get(ts, True),
-                key=f"ts_recon_{ts}"
-            )
-    
-    st.markdown("**📅 Weekly to monthly scales (1-45 days):**")
-    weekly_cols = st.columns(5)
-    weekly_scales = [42.0, 84.0, 168.0, 273.75, 547.5]
-    
-    for i, ts in enumerate(weekly_scales):
-        with weekly_cols[i]:
-            st.session_state['reconstruction_checkboxes'][ts] = st.checkbox(
-                time_scale_info[ts], 
-                value=st.session_state['reconstruction_checkboxes'].get(ts, True),
-                key=f"ts_recon_{ts}"
-            )
-    
-    st.markdown("**🌍 Seasonal to annual scales (> 45 days):**")
-    seasonal_cols = st.columns(4)
-    seasonal_scales = [1095.0, 2190.0, 4380.0, 8760.0]
-    
-    for i, ts in enumerate(seasonal_scales):
-        with seasonal_cols[i]:
-            st.session_state['reconstruction_checkboxes'][ts] = st.checkbox(
-                time_scale_info[ts], 
-                value=st.session_state['reconstruction_checkboxes'].get(ts, True),
-                key=f"ts_recon_{ts}"
+                key=f"ts_recon_{ts}",
+                label_visibility="visible"
             )
     
     # Get selected time scales
@@ -781,19 +909,19 @@ if 'decomposition_done' in st.session_state and st.session_state['decomposition_
                 matrix_file = file_mgr.get_matrix_path(st.session_state['year_to_process'])
                 matrix = sparse.load_npz(matrix_file)
                 
-                # Reconstruct
+                # CRITICAL FIX: Parameter name is beta_sheet, NOT vec_betas
                 reconstructed_signal = reconstruct(
                     time_scales=st.session_state['time_scales'],
                     reconstructed_time_scales=selected_time_scales_recon,
                     matrix=matrix,
-                    vec_betas=st.session_state['results_betas'][st.session_state['year_to_process']],
-                    title=f'{st.session_state["signal_type"]} Signal - Reconstructed with {len(selected_time_scales_recon)} time scales',
+                    beta_sheet=st.session_state['results_betas'][st.session_state['year_to_process']],  # FIXED
+                    title=f'{st.session_state["signal_type"]} Signal - Reconstructed',
                     xmin=0,
                     xmax=st.session_state['dpy'],
                     dpy=st.session_state['dpy'],
                     dpd=st.session_state['ndpd'],
                     add_offset=add_offset,
-                    plot=False  # Don't plot internally, we'll plot with Plotly
+                    plot=False  # Don't plot internally, we'll use Plotly
                 )
                 
                 # Display reconstructed signal with Plotly
@@ -814,7 +942,7 @@ if 'decomposition_done' in st.session_state and st.session_state['decomposition_
                 )
                 
                 fig.update_layout(
-                    title=f'Reconstructed {st.session_state["signal_type"]} Signal ({len(selected_time_scales_recon)} time scales)',
+                    title=f'Reconstructed {st.session_state["signal_type"]} Signal - {st.session_state["country_name"]} ({len(selected_time_scales_recon)} time scales)',
                     xaxis_title='Time (days)',
                     yaxis_title='Amplitude',
                     height=500,
