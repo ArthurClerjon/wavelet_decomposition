@@ -670,17 +670,27 @@ def reconstruct(time_scales, reconstructed_time_scales,
     # reconstructed_time_scales = time_scales
     # Concat time scales
     concat_betas = []
+
+    # Convert to sets for faster lookup and better float comparison
+    reconstructed_set = set(reconstructed_time_scales)
+
     for i, ts in enumerate(time_scales):
-        if ts in reconstructed_time_scales:
+        # Use approximate float comparison (within tolerance)
+        is_selected = any(abs(ts - rts) < 1e-6 for rts in reconstructed_set)
+
+        if is_selected:
             concat_betas.extend(beta_sheet[i])
         else:
-            # print(concat_betas)
+            # Add zeros for non-selected time scales
             concat_betas.extend([0.] * len(beta_sheet[i]))
 
     if add_offset:
         concat_betas.extend(beta_sheet[-1])
     else:
         concat_betas.extend([0.])
+
+    # Perform matrix multiplication (works with both dense and sparse matrices)
+    reconstructed = matrix.dot(concat_betas[::-1])
 
     # PLots options
     if plot :
@@ -692,14 +702,14 @@ def reconstruct(time_scales, reconstructed_time_scales,
         time = np.linspace(0, dpy, dpy * dpd)
         fig = plt.figure()
         fig.set_size_inches(10, 8)
-        plt.plot(time, np.dot(matrix, concat_betas[::-1]))
+        plt.plot(time, reconstructed)
         plt.xlim(xmin, xmax)
         plt.xlabel('Days')
         plt.ylabel('Power')
         plt.title(title)
         plt.show()
 
-    return np.dot(matrix, concat_betas[::-1] )
+    return reconstructed
 
 
 def stack_betas(saved_sheets, time_series, chosen_years):
