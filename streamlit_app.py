@@ -1074,9 +1074,8 @@ if 'decomposition_done' in st.session_state and st.session_state['decomposition_
                                     st.write(f"**Time scales:** {len(plot_data['time_scales'])} selected")
                         else:
                             st.error("Plot data not available")
-
 # ============================================================================
-# STEP 5: SIGNAL RECONSTRUCTION WITH FIXES
+# STEP 5: SIGNAL RECONSTRUCTION - FIXED VERSION
 # ============================================================================
 
 if 'decomposition_done' in st.session_state and st.session_state['decomposition_done']:
@@ -1088,309 +1087,298 @@ if 'decomposition_done' in st.session_state and st.session_state['decomposition_
     and analyze specific frequency components.
     """)
     
-    # Time scale selection for reconstruction
-    st.markdown("#### Select Time Scales for Reconstruction")
+    # Initialize storage for generated reconstructions
+    if 'generated_reconstructions' not in st.session_state:
+        st.session_state['generated_reconstructions'] = []
     
-    # Time scale info (shortened labels for single line)
-    time_scale_info = {
-        0.75: "0.75h", 
-        1.5: "1.5h", 
-        3.0: "3h", 
-        6.0: "6h", 
-        12.0: "12h", 
-        24.0: "24h",
-        42.0: "42h", 
-        84.0: "84h", 
-        168.0: "168h", 
-        273.75: "273.75h", 
-        547.5: "547.5h",
-        1095.0: "1095h", 
-        2190.0: "2190h", 
-        4380.0: "4380h", 
-        8760.0: "8760h"
-    }
-    
-    # Initialize session state for reconstruction checkboxes if not exists
-    if 'reconstruction_checkboxes' not in st.session_state:
-        st.session_state['reconstruction_checkboxes'] = {ts: True for ts in st.session_state['time_scales']}
-    
-    # Select All / Deselect All buttons
-    col_btn1, col_btn2, col_spacer = st.columns([1, 1, 3])
-    
-    with col_btn1:
-        if st.button("✅ Select All", key="select_all_recon"):
-            for ts in st.session_state['time_scales']:
-                st.session_state['reconstruction_checkboxes'][ts] = True
-            st.rerun()
-    
-    with col_btn2:
-        if st.button("❌ Deselect All", key="deselect_all_recon"):
-            for ts in st.session_state['time_scales']:
-                st.session_state['reconstruction_checkboxes'][ts] = False
-            st.rerun()
-    
-    st.markdown("---")
-    st.markdown("**All Time Scales:**")
-    
-    # All 15 checkboxes on a single line - FIXED VERSION
-    checkbox_cols = st.columns(15)
-    
-    for i, ts in enumerate(st.session_state['time_scales']):
-        with checkbox_cols[i]:
-            # Read current value from session state
-            current_value = st.session_state['reconstruction_checkboxes'].get(ts, True)
-            
-            # Create checkbox
-            new_value = st.checkbox(
-                time_scale_info[ts],
-                value=current_value,
-                key=f"ts_recon_{ts}",
-                label_visibility="visible"
-            )
-            
-            # Only update session state if value changed
-            if new_value != current_value:
-                st.session_state['reconstruction_checkboxes'][ts] = new_value
-    
-    # Get selected time scales
-    selected_time_scales_recon = [
-        ts for ts in st.session_state['time_scales'] 
-        if st.session_state['reconstruction_checkboxes'].get(ts, True)
-    ]
-    
-    if selected_time_scales_recon:
-        st.info(f"✅ Selected {len(selected_time_scales_recon)} time scales for reconstruction")
-    else:
-        st.warning("⚠️ No time scales selected. Select at least one time scale to reconstruct.")
-    
-    # Reconstruction options
-    add_offset = st.checkbox(
-        "Add offset (DC component)",
-        value=False,
-        help="Include the mean value in reconstruction"
-    )
-    
-    # Run reconstruction - WITH FIXES FOR INFINITE LOOP
-    if st.button("🔄 Reconstruct Signal") and selected_time_scales_recon:
-        with st.spinner("Reconstructing signal (this may take a moment)..."):
-            try:
-                # Load matrix
-                file_mgr = WaveletFileManager(
-                    region=st.session_state['country_name'],
-                    wl_shape=st.session_state['wavelet_shape']
-                )
-                matrix_file = file_mgr.get_matrix_path(st.session_state['year_to_process'])
-                matrix = sparse.load_npz(matrix_file)
-                
-                # CRITICAL FIX: Parameter name is beta_sheet, NOT vec_betas
-                # Also add validation to prevent infinite loop
-                reconstructed_signal = reconstruct(
-                    time_scales=st.session_state['time_scales'],
-                    reconstructed_time_scales=selected_time_scales_recon,
-                    matrix=matrix,
-                    beta_sheet=st.session_state['results_betas'][st.session_state['year_to_process']],
-                    title=f'{st.session_state["signal_type"]} Signal - Reconstructed',
-                    xmin=0,
-                    xmax=st.session_state['dpy'],
-                    dpy=st.session_state['dpy'],
-                    dpd=st.session_state['ndpd'],
-                    add_offset=add_offset,
-                    plot=False  # Don't plot internally, we'll use Plotly
-                )
-                
-                # Validate result to catch infinite loop issues
-                if reconstructed_signal is None:
-                    st.error("❌ Reconstruction returned None. Check the reconstruct() function.")
-                    st.stop()
-                
-                if len(reconstructed_signal) == 0:
-                    st.error("❌ Reconstruction returned empty array.")
-                    st.stop()
-                
-                # Show success message
-                st.write(f"✅ Reconstruction complete. Signal length: {len(reconstructed_signal)} points")
-                
-                # Display reconstructed signal with Plotly
-                st.markdown("### Reconstructed Signal")
-                
-                time_axis = np.linspace(0, st.session_state['dpy'], len(reconstructed_signal))
-                
-                fig = go.Figure()
-                
-                fig.add_trace(
-                    go.Scatter(
-                        x=time_axis,
-                        y=reconstructed_signal,
-                        mode='lines',
-                        name='Reconstructed Signal',
-                        line=dict(color='#2E86AB', width=1.5)
-                    )
-                )
-                
-                fig.update_layout(
-                    title=f'Reconstructed {st.session_state["signal_type"]} Signal - {st.session_state["country_name"]} ({len(selected_time_scales_recon)} time scales)',
-                    xaxis_title='Time (days)',
-                    yaxis_title='Amplitude',
-                    height=500,
-                    template='plotly_white',
-                    hovermode='x unified'
-                )
-                
-                st.plotly_chart(fig, use_container_width=True)
-                
-                st.success(f"✅ Signal reconstructed with {len(selected_time_scales_recon)} time scales!")
-                
-                # Show statistics
-                st.markdown("#### Reconstruction Statistics")
-                col1, col2, col3, col4 = st.columns(4)
-                with col1:
-                    st.metric("Mean", f"{np.mean(reconstructed_signal):.4f}")
-                with col2:
-                    st.metric("Std Dev", f"{np.std(reconstructed_signal):.4f}")
-                with col3:
-                    st.metric("Min", f"{np.min(reconstructed_signal):.4f}")
-                with col4:
-                    st.metric("Max", f"{np.max(reconstructed_signal):.4f}")
-                
-            except Exception as e:
-                st.error(f"❌ Error during reconstruction: {str(e)}")
-                st.exception(e)
-                st.stop()
+    # Initialize storage for reconstruction configurations
+    if 'recon_configs' not in st.session_state:
+        st.session_state['recon_configs'] = []
     
     # ========================================================================
-    # ADD RECONSTRUCTION SUBPLOTS
+    # SECTION 1: ADD NEW RECONSTRUCTION CONFIGURATION
     # ========================================================================
     
-    if 'reconstruction_subplots' not in st.session_state:
-        st.session_state['reconstruction_subplots'] = []
+    st.markdown("### Add New Reconstruction")
     
-    st.markdown("---")
-    st.markdown("#### Add More Reconstructions")
-    
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
     
     with col1:
-        if st.button("➕ Add Reconstruction Below", key="add_recon_below"):
-            st.session_state['reconstruction_subplots'].append({
-                'id': len(st.session_state['reconstruction_subplots']),
+        if st.button("➕ Add Reconstruction", use_container_width=True):
+            st.session_state['recon_configs'].append({
+                'id': len(st.session_state['recon_configs']),
                 'time_scales': list(st.session_state['time_scales']),
                 'add_offset': False,
-                'position': 'below'
+                'generated': False,
+                'fig': None,
+                'signal': None
             })
-            st.info("Configure the new reconstruction below")
+            st.rerun()
     
     with col2:
-        if st.button("➕ Add Reconstruction Right", key="add_recon_right"):
-            st.session_state['reconstruction_subplots'].append({
-                'id': len(st.session_state['reconstruction_subplots']),
-                'time_scales': list(st.session_state['time_scales']),
-                'add_offset': False,
-                'position': 'right'
-            })
-            st.info("Configure the new reconstruction below")
+        if st.button("🗑️ Clear All Reconstructions", use_container_width=True):
+            st.session_state['generated_reconstructions'] = []
+            st.session_state['recon_configs'] = []
+            st.rerun()
     
-    # Display and configure additional reconstructions
-    if st.session_state['reconstruction_subplots']:
-        st.markdown("##### Additional Reconstructions")
+    with col3:
+        if st.session_state['generated_reconstructions']:
+            st.metric("Generated", len(st.session_state['generated_reconstructions']))
+    
+    # ========================================================================
+    # SECTION 2: CONFIGURE PENDING RECONSTRUCTIONS
+    # ========================================================================
+    
+    pending_recons = [r for r in st.session_state['recon_configs'] if not r['generated']]
+    
+    if pending_recons:
+        st.markdown("---")
+        st.markdown("### Configure New Reconstructions")
         
-        for idx, recon_cfg in enumerate(st.session_state['reconstruction_subplots']):
-            with st.expander(f"Reconstruction {idx + 2} (Position: {recon_cfg['position']})", expanded=False):
+        for idx, recon_cfg in enumerate(pending_recons):
+            # Find the index in the full list
+            full_idx = st.session_state['recon_configs'].index(recon_cfg)
+            
+            with st.expander(f"⚙️ Reconstruction {full_idx + 1} - Configuration", expanded=True):
                 
                 # Time scale selection
                 st.markdown("**Select Time Scales:**")
                 
-                # All checkboxes on a single line
-                checkbox_cols_extra = st.columns(15)
+                # Initialize checkbox state for this reconstruction
+                checkbox_key = f'recon_checks_{full_idx}'
+                if checkbox_key not in st.session_state:
+                    st.session_state[checkbox_key] = {ts: True for ts in st.session_state['time_scales']}
+                
+                # Select/Deselect buttons - FIXED VERSION
+                col_btn1, col_btn2, col_spacer = st.columns([1, 1, 3])
+                
+                with col_btn1:
+                    if st.button("✅ All", key=f"sel_all_recon_{full_idx}"):
+                        for ts in st.session_state['time_scales']:
+                            st.session_state[checkbox_key][ts] = True
+                        st.rerun()
+                
+                with col_btn2:
+                    if st.button("❌ None", key=f"desel_all_recon_{full_idx}"):
+                        for ts in st.session_state['time_scales']:
+                            st.session_state[checkbox_key][ts] = False
+                        st.rerun()
+                
+                # Checkboxes in single line - FIXED VERSION
+                checkbox_cols = st.columns(15)
+                
+                time_scale_info = {
+                    0.75: "0.75h", 1.5: "1.5h", 3.0: "3h", 6.0: "6h", 12.0: "12h", 24.0: "24h",
+                    42.0: "42h", 84.0: "84h", 168.0: "168h", 273.75: "273.75h", 547.5: "547.5h",
+                    1095.0: "1095h", 2190.0: "2190h", 4380.0: "4380h", 8760.0: "8760h"
+                }
                 
                 for i, ts in enumerate(st.session_state['time_scales']):
-                    with checkbox_cols_extra[i]:
-                        is_selected = st.checkbox(
-                            f"{ts}h",
-                            value=(ts in recon_cfg['time_scales']),
-                            key=f"ts_extra_{idx}_{ts}"
+                    with checkbox_cols[i]:
+                        # CRITICAL FIX: Read first, create, then update if changed
+                        current = st.session_state[checkbox_key].get(ts, True)
+                        new = st.checkbox(
+                            time_scale_info[ts],
+                            value=current,
+                            key=f"check_recon_{full_idx}_{ts}"
                         )
-                        
-                        # Update the config
-                        if is_selected and ts not in recon_cfg['time_scales']:
-                            recon_cfg['time_scales'].append(ts)
-                        elif not is_selected and ts in recon_cfg['time_scales']:
-                            recon_cfg['time_scales'].remove(ts)
+                        if new != current:
+                            st.session_state[checkbox_key][ts] = new
+                
+                # Update recon config with selected scales
+                recon_cfg['time_scales'] = [
+                    ts for ts in st.session_state['time_scales']
+                    if st.session_state[checkbox_key].get(ts, True)
+                ]
+                
+                # Show selection count
+                if recon_cfg['time_scales']:
+                    st.info(f"✅ Selected {len(recon_cfg['time_scales'])} time scales")
+                else:
+                    st.warning("⚠️ No time scales selected")
                 
                 # Add offset option
+                st.markdown("**Options:**")
                 recon_cfg['add_offset'] = st.checkbox(
-                    "Add offset",
+                    "Add offset (DC component)",
                     value=recon_cfg['add_offset'],
-                    key=f"offset_extra_{idx}"
+                    key=f"offset_recon_{full_idx}"
                 )
                 
-                # Reconstruct button
-                if st.button(f"🔄 Reconstruct {idx + 2}", key=f"recon_btn_{idx}"):
-                    if recon_cfg['time_scales']:
-                        try:
-                            # Load matrix
-                            file_mgr = WaveletFileManager(
-                                region=st.session_state['country_name'],
-                                wl_shape=st.session_state['wavelet_shape']
-                            )
-                            matrix_file = file_mgr.get_matrix_path(st.session_state['year_to_process'])
-                            matrix = sparse.load_npz(matrix_file)
-                            
-                            # Reconstruct
-                            reconstructed_signal_extra = reconstruct(
-                                time_scales=st.session_state['time_scales'],
-                                reconstructed_time_scales=recon_cfg['time_scales'],
-                                matrix=matrix,
-                                beta_sheet=st.session_state['results_betas'][st.session_state['year_to_process']],
-                                title=f'Reconstruction {idx + 2}',
-                                xmin=0,
-                                xmax=st.session_state['dpy'],
-                                dpy=st.session_state['dpy'],
-                                dpd=st.session_state['ndpd'],
-                                add_offset=recon_cfg['add_offset'],
-                                plot=False
-                            )
-                            
-                            # Plot with Plotly
-                            time_axis = np.linspace(0, st.session_state['dpy'], len(reconstructed_signal_extra))
-                            
-                            fig = go.Figure()
-                            
-                            fig.add_trace(
-                                go.Scatter(
-                                    x=time_axis,
-                                    y=reconstructed_signal_extra,
-                                    mode='lines',
-                                    name=f'Reconstruction {idx + 2}',
-                                    line=dict(color='#A23B72', width=1.5)
-                                )
-                            )
-                            
-                            fig.update_layout(
-                                title=f'Reconstruction {idx + 2} - {len(recon_cfg["time_scales"])} scales',
-                                xaxis_title='Time (days)',
-                                yaxis_title='Amplitude',
-                                height=400,
-                                template='plotly_white',
-                                hovermode='x unified'
-                            )
-                            
-                            st.plotly_chart(fig, use_container_width=True)
-                            
-                            st.success(f"✅ Reconstruction {idx + 2} complete!")
-                            
-                        except Exception as e:
-                            st.error(f"❌ Error: {str(e)}")
-                            st.exception(e)
-                    else:
-                        st.warning("⚠️ Select at least one time scale")
+                # Cancel button
+                col_cancel1, col_cancel2, col_cancel3 = st.columns([1, 2, 1])
+                with col_cancel2:
+                    if st.button("❌ Cancel", key=f"cancel_recon_{full_idx}", use_container_width=True):
+                        st.session_state['recon_configs'].remove(recon_cfg)
+                        st.rerun()
                 
-                # Remove button
-                if st.button(f"🗑️ Remove Reconstruction {idx + 2}", key=f"remove_recon_{idx}"):
-                    st.session_state['reconstruction_subplots'].pop(idx)
-                    st.rerun()
-
+                # Generate button
+                st.markdown("---")
+                col_gen1, col_gen2, col_gen3 = st.columns([1, 2, 1])
+                
+                with col_gen2:
+                    if st.button(
+                        f"🔄 Generate Reconstruction {full_idx + 1}",
+                        key=f"generate_recon_{full_idx}",
+                        type="primary",
+                        use_container_width=True
+                    ):
+                        if not recon_cfg['time_scales']:
+                            st.error("⚠️ Please select at least one time scale")
+                        else:
+                            with st.spinner("Reconstructing signal..."):
+                                try:
+                                    # Load matrix
+                                    file_mgr = WaveletFileManager(
+                                        region=st.session_state['country_name'],
+                                        wl_shape=st.session_state['wavelet_shape']
+                                    )
+                                    matrix_file = file_mgr.get_matrix_path(st.session_state['year_to_process'])
+                                    matrix = sparse.load_npz(matrix_file)
+                                    
+                                    # Reconstruct
+                                    reconstructed_signal = reconstruct(
+                                        time_scales=st.session_state['time_scales'],
+                                        reconstructed_time_scales=recon_cfg['time_scales'],
+                                        matrix=matrix,
+                                        beta_sheet=st.session_state['results_betas'][st.session_state['year_to_process']],
+                                        title=f'Reconstruction {full_idx + 1}',
+                                        xmin=0,
+                                        xmax=st.session_state['dpy'],
+                                        dpy=st.session_state['dpy'],
+                                        dpd=st.session_state['ndpd'],
+                                        add_offset=recon_cfg['add_offset'],
+                                        plot=False
+                                    )
+                                    
+                                    # Validate
+                                    if reconstructed_signal is None or len(reconstructed_signal) == 0:
+                                        st.error("❌ Reconstruction failed")
+                                    else:
+                                        # Create plot with Plotly
+                                        time_axis = np.linspace(0, st.session_state['dpy'], len(reconstructed_signal))
+                                        
+                                        fig = go.Figure()
+                                        
+                                        fig.add_trace(
+                                            go.Scatter(
+                                                x=time_axis,
+                                                y=reconstructed_signal,
+                                                mode='lines',
+                                                name='Reconstructed',
+                                                line=dict(color='#2E86AB', width=1.5)
+                                            )
+                                        )
+                                        
+                                        # IMPROVED TITLE: Shows time scales used
+                                        scales_str = ', '.join([f"{ts}h" for ts in recon_cfg['time_scales'][:5]])
+                                        if len(recon_cfg['time_scales']) > 5:
+                                            scales_str += f" ... (+{len(recon_cfg['time_scales'])-5} more)"
+                                        
+                                        title_text = (f"{st.session_state['signal_type']} - "
+                                                     f"{st.session_state['year_to_process']} - "
+                                                     f"{len(recon_cfg['time_scales'])} scales: {scales_str}")
+                                        
+                                        fig.update_layout(
+                                            title=title_text,
+                                            xaxis_title='Time (days)',
+                                            yaxis_title='Amplitude',
+                                            height=400,
+                                            template='plotly_white',
+                                            hovermode='x unified'
+                                        )
+                                        
+                                        # Store the reconstruction
+                                        recon_cfg['fig'] = fig
+                                        recon_cfg['signal'] = reconstructed_signal
+                                        recon_cfg['generated'] = True
+                                        recon_cfg['title'] = title_text
+                                        
+                                        # Add to generated reconstructions
+                                        st.session_state['generated_reconstructions'].append(recon_cfg)
+                                        
+                                        st.success(f"✅ Reconstruction {full_idx + 1} generated!")
+                                        st.rerun()
+                                
+                                except Exception as e:
+                                    st.error(f"❌ Error: {str(e)}")
+                                    st.exception(e)
+    
+    # ========================================================================
+    # SECTION 3: DISPLAY ALL GENERATED RECONSTRUCTIONS
+    # ========================================================================
+    
+    if st.session_state['generated_reconstructions']:
+        st.markdown("---")
+        st.markdown("### Generated Reconstructions")
+        
+        # Layout options
+        col_layout1, col_layout2, col_layout3 = st.columns(3)
+        
+        with col_layout1:
+            layout_option = st.radio(
+                "Layout",
+                options=["Grid (2 columns)", "Grid (3 columns)", "Stacked (1 column)"],
+                index=0,
+                key="recon_layout",
+                help="Choose how to arrange multiple reconstructions"
+            )
+        
+        with col_layout2:
+            if st.button("🔄 Refresh", use_container_width=True, key="refresh_recons"):
+                st.rerun()
+        
+        with col_layout3:
+            st.write(f"**{len(st.session_state['generated_reconstructions'])} reconstruction(s)**")
+        
+        st.markdown("---")
+        
+        # Determine number of columns
+        if layout_option == "Grid (2 columns)":
+            n_cols = 2
+        elif layout_option == "Grid (3 columns)":
+            n_cols = 3
+        else:
+            n_cols = 1
+        
+        # Display reconstructions in grid
+        recons = st.session_state['generated_reconstructions']
+        
+        for i in range(0, len(recons), n_cols):
+            cols = st.columns(n_cols)
+            
+            for j in range(n_cols):
+                idx = i + j
+                if idx < len(recons):
+                    recon_data = recons[idx]
+                    
+                    with cols[j]:
+                        # Header with remove button
+                        col_title, col_remove = st.columns([4, 1])
+                        
+                        with col_title:
+                            st.markdown(f"**Reconstruction {idx + 1}**")
+                        
+                        with col_remove:
+                            if st.button("🗑️", key=f"remove_recon_{idx}", help="Remove"):
+                                st.session_state['generated_reconstructions'].pop(idx)
+                                if recon_data in st.session_state['recon_configs']:
+                                    st.session_state['recon_configs'].remove(recon_data)
+                                st.rerun()
+                        
+                        # Display the plot
+                        if recon_data['fig'] is not None:
+                            st.plotly_chart(recon_data['fig'], use_container_width=True)
+                            
+                            # Show info (NOT statistics)
+                            with st.expander(f"ℹ️ Info", expanded=False):
+                                st.write(f"**Time scales:** {len(recon_data['time_scales'])}")
+                                st.write(f"**Scales used:** {', '.join([f'{ts}h' for ts in recon_data['time_scales']])}")
+                                st.write(f"**Offset included:** {'Yes' if recon_data['add_offset'] else 'No'}")
+                        else:
+                            st.error("Reconstruction data not available")
 # ============================================================================
-# EXPORT WORKFLOW
+# EXPORT WORKFLOW - FIXED VERSION WITH FIGURES
 # ============================================================================
 
 if 'data_imported' in st.session_state and st.session_state['data_imported']:
@@ -1398,7 +1386,7 @@ if 'data_imported' in st.session_state and st.session_state['data_imported']:
     st.markdown('<div class="section-header">📥 Export Workflow</div>', unsafe_allow_html=True)
     
     st.markdown("""
-    Export your complete analysis workflow including parameters, results, and visualizations.
+    Export your complete analysis workflow including parameters, results, and all generated visualizations.
     """)
     
     # Default filename
@@ -1417,9 +1405,12 @@ if 'data_imported' in st.session_state and st.session_state['data_imported']:
     
     with col_html:
         if st.button("📄 Export as HTML", use_container_width=True):
-            with st.spinner("Generating HTML export..."):
+            with st.spinner("Generating HTML export with figures..."):
                 try:
-                    # Generate HTML content
+                    import base64
+                    from io import BytesIO
+                    
+                    # Start HTML
                     html_content = f"""
 <!DOCTYPE html>
 <html>
@@ -1429,7 +1420,7 @@ if 'data_imported' in st.session_state and st.session_state['data_imported']:
     <style>
         body {{
             font-family: Arial, sans-serif;
-            max-width: 1200px;
+            max-width: 1400px;
             margin: 0 auto;
             padding: 20px;
             line-height: 1.6;
@@ -1452,21 +1443,38 @@ if 'data_imported' in st.session_state and st.session_state['data_imported']:
             border-left: 4px solid #2E86AB;
             margin: 15px 0;
         }}
-        .param-table {{
+        .figure {{
+            margin: 30px 0;
+            page-break-inside: avoid;
+            text-align: center;
+        }}
+        .figure img {{
+            max-width: 100%;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }}
+        .figure-caption {{
+            margin-top: 10px;
+            font-style: italic;
+            color: #666;
+            font-size: 0.9rem;
+        }}
+        table {{
             width: 100%;
             border-collapse: collapse;
             margin: 15px 0;
         }}
-        .param-table th, .param-table td {{
+        th, td {{
             border: 1px solid #ddd;
             padding: 12px;
             text-align: left;
         }}
-        .param-table th {{
+        th {{
             background-color: #2E86AB;
             color: white;
         }}
-        .param-table tr:nth-child(even) {{
+        tr:nth-child(even) {{
             background-color: #f9f9f9;
         }}
         .footer {{
@@ -1483,105 +1491,72 @@ if 'data_imported' in st.session_state and st.session_state['data_imported']:
     
     <div class="info-box">
         <strong>Generated:</strong> {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}<br>
-        <strong>Filename:</strong> {export_filename}
+        <strong>Region:</strong> {st.session_state.get('country_name', 'N/A')}<br>
+        <strong>Signal:</strong> {st.session_state.get('signal_type', 'N/A')}<br>
+        <strong>Year:</strong> {st.session_state.get('year_to_process', 'N/A')}
     </div>
     
-    <h2>1. Data Information</h2>
-    <table class="param-table">
-        <tr>
-            <th>Parameter</th>
-            <th>Value</th>
-        </tr>
-        <tr>
-            <td>Region</td>
-            <td>{st.session_state.get('country_name', 'N/A')}</td>
-        </tr>
-        <tr>
-            <td>Signal Type</td>
-            <td>{st.session_state.get('signal_type', 'N/A')}</td>
-        </tr>
-        <tr>
-            <td>Year Analyzed</td>
-            <td>{st.session_state.get('year_to_process', 'N/A')}</td>
-        </tr>
-        <tr>
-            <td>Available Years</td>
-            <td>{', '.join(st.session_state.get('years', []))}</td>
-        </tr>
-        <tr>
-            <td>Data Points per Day (original)</td>
-            <td>{st.session_state.get('dpd', 'N/A')}</td>
-        </tr>
-        <tr>
-            <td>Data Points per Day (interpolated)</td>
-            <td>{st.session_state.get('ndpd', 'N/A')}</td>
-        </tr>
-        <tr>
-            <td>Days per Year</td>
-            <td>{st.session_state.get('dpy', 'N/A')}</td>
-        </tr>
-        <tr>
-            <td>Total Signal Length</td>
-            <td>{st.session_state.get('signal_length', 'N/A'):,} points</td>
-        </tr>
+    <h2>1. Configuration Parameters</h2>
+    <table>
+        <tr><th>Parameter</th><th>Value</th></tr>
+        <tr><td>Signal Type</td><td>{st.session_state.get('signal_type', 'N/A')}</td></tr>
+        <tr><td>Year</td><td>{st.session_state.get('year_to_process', 'N/A')}</td></tr>
+        <tr><td>Region</td><td>{st.session_state.get('country_name', 'N/A')}</td></tr>
+        <tr><td>Wavelet Shape</td><td>{st.session_state.get('wavelet_shape', 'N/A')}</td></tr>
+        <tr><td>Data Points/Day</td><td>{st.session_state.get('ndpd', 'N/A')}</td></tr>
+        <tr><td>Days/Year</td><td>{st.session_state.get('dpy', 'N/A')}</td></tr>
+        <tr><td>Time Scales</td><td>15 (0.75h to 8760h)</td></tr>
     </table>
     
-    <h2>2. Decomposition Configuration</h2>
-    <table class="param-table">
-        <tr>
-            <th>Parameter</th>
-            <th>Value</th>
-        </tr>
-        <tr>
-            <td>Wavelet Shape</td>
-            <td>{st.session_state.get('wavelet_shape', 'N/A')}</td>
-        </tr>
-        <tr>
-            <td>Yearly Wavelets (vy)</td>
-            <td>{st.session_state.get('vy', 'N/A')}</td>
-        </tr>
-        <tr>
-            <td>Weekly Wavelets (vw)</td>
-            <td>{st.session_state.get('vw', 'N/A')}</td>
-        </tr>
-        <tr>
-            <td>Daily Wavelets (vd)</td>
-            <td>{st.session_state.get('vd', 'N/A')}</td>
-        </tr>
-        <tr>
-            <td>Total Time Scales</td>
-            <td>{len(st.session_state.get('time_scales', []))}</td>
-        </tr>
-    </table>
-    
-    <h2>3. Time Scales</h2>
+    <h2>2. Time Scales</h2>
     <div class="info-box">
         <strong>15 Time Scales:</strong><br>
         {', '.join([f'{ts}h' for ts in st.session_state.get('time_scales', [])])}
     </div>
-    
-    <h2>4. Output Files</h2>
-    <table class="param-table">
-        <tr>
-            <th>File Type</th>
-            <th>Path</th>
-        </tr>
-        <tr>
-            <td>Translation File</td>
-            <td>{st.session_state.get('trans_file', 'N/A')}</td>
-        </tr>
-        <tr>
-            <td>Matrix Files</td>
-            <td>{', '.join(st.session_state.get('matrix_files', ['N/A']))}</td>
-        </tr>
-    </table>
-    
-    <h2>5. Methodology</h2>
-    <p>
-        This analysis follows the wavelet decomposition methodology described in:
-    </p>
+"""
+                    
+                    # Add Step 4 visualizations if any
+                    if 'generated_plots' in st.session_state and st.session_state['generated_plots']:
+                        html_content += "<h2>3. Step 4: Visualizations</h2>\n"
+                        
+                        for idx, plot_data in enumerate(st.session_state['generated_plots']):
+                            if plot_data['fig'] is not None:
+                                # Convert matplotlib figure to base64
+                                buf = BytesIO()
+                                plot_data['fig'].savefig(buf, format='png', dpi=150, bbox_inches='tight')
+                                buf.seek(0)
+                                img_base64 = base64.b64encode(buf.read()).decode()
+                                buf.close()
+                                
+                                html_content += f"""
+    <div class="figure">
+        <img src="data:image/png;base64,{img_base64}" alt="Visualization {idx+1}">
+        <div class="figure-caption">Figure {idx+1}: {plot_data.get('title', f'Visualization {idx+1}')}</div>
+    </div>
+"""
+                    
+                    # Add Step 5 reconstructions if any
+                    if 'generated_reconstructions' in st.session_state and st.session_state['generated_reconstructions']:
+                        html_content += "<h2>4. Step 5: Reconstructions</h2>\n"
+                        
+                        for idx, recon_data in enumerate(st.session_state['generated_reconstructions']):
+                            if recon_data['fig'] is not None:
+                                # Convert Plotly figure to static image
+                                img_bytes = recon_data['fig'].to_image(format="png", width=1200, height=600)
+                                img_base64 = base64.b64encode(img_bytes).decode()
+                                
+                                html_content += f"""
+    <div class="figure">
+        <img src="data:image/png;base64,{img_base64}" alt="Reconstruction {idx+1}">
+        <div class="figure-caption">Reconstruction {idx+1}: {recon_data.get('title', f'Reconstruction {idx+1}')}</div>
+    </div>
+"""
+                    
+                    # Add methodology reference
+                    html_content += """
+    <h2>5. Methodology Reference</h2>
     <div class="info-box">
-        <strong>Reference:</strong> A. Clerjon and F. Perdu, 
+        <strong>Based on:</strong> A. Clerjon and F. Perdu, 
         "Matching intermittency and electricity storage characteristics through 
         time scale analysis: an energy return on investment comparison", 
         <em>Energy Environ. Sci.</em>, 2019, 12, 693-705
@@ -1589,7 +1564,7 @@ if 'data_imported' in st.session_state and st.session_state['data_imported']:
     
     <div class="footer">
         <p>📊 Wavelet Decomposition Analysis Interface</p>
-        <p>Based on Clerjon & Perdu (2019) methodology</p>
+        <p>Generated with Streamlit - Based on Clerjon & Perdu (2019) methodology</p>
     </div>
 </body>
 </html>
@@ -1597,13 +1572,18 @@ if 'data_imported' in st.session_state and st.session_state['data_imported']:
                     
                     # Offer download
                     st.download_button(
-                        label="⬇️ Download HTML",
+                        label="⬇️ Download HTML Report",
                         data=html_content,
                         file_name=f"{export_filename}.html",
                         mime="text/html"
                     )
                     
-                    st.success("✅ HTML export ready!")
+                    st.success("✅ HTML export ready with all figures!")
+                    
+                    # Show summary
+                    n_viz = len(st.session_state.get('generated_plots', []))
+                    n_recon = len(st.session_state.get('generated_reconstructions', []))
+                    st.info(f"Exported: {n_viz} visualizations + {n_recon} reconstructions")
                     
                 except Exception as e:
                     st.error(f"❌ Error generating HTML: {str(e)}")
@@ -1611,13 +1591,147 @@ if 'data_imported' in st.session_state and st.session_state['data_imported']:
     
     with col_pdf:
         if st.button("📕 Export as PDF", use_container_width=True):
-            st.info("PDF export requires reportlab library. Install with: pip install reportlab")
-            st.markdown("""
-            For PDF export functionality, you can:
-            1. Install reportlab: `pip install reportlab`
-            2. Use the HTML export and convert to PDF using your browser's print function
-            3. Or use an online HTML to PDF converter
-            """)
+            with st.spinner("Generating PDF export..."):
+                try:
+                    from reportlab.lib.pagesizes import A4
+                    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+                    from reportlab.lib.units import inch
+                    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
+                    from reportlab.lib import colors
+                    from reportlab.lib.enums import TA_CENTER
+                    import base64
+                    
+                    # Create PDF buffer
+                    buffer = BytesIO()
+                    
+                    # Create document
+                    doc = SimpleDocTemplate(buffer, pagesize=A4, topMargin=0.5*inch, bottomMargin=0.5*inch)
+                    
+                    # Container for elements
+                    elements = []
+                    
+                    # Styles
+                    styles = getSampleStyleSheet()
+                    title_style = ParagraphStyle(
+                        'CustomTitle',
+                        parent=styles['Heading1'],
+                        fontSize=24,
+                        textColor=colors.HexColor('#2E86AB'),
+                        spaceAfter=30,
+                        alignment=TA_CENTER
+                    )
+                    heading_style = ParagraphStyle(
+                        'CustomHeading',
+                        parent=styles['Heading2'],
+                        fontSize=16,
+                        textColor=colors.HexColor('#A23B72'),
+                        spaceAfter=12,
+                        spaceBefore=12
+                    )
+                    
+                    # Title
+                    elements.append(Paragraph("Wavelet Decomposition Analysis Report", title_style))
+                    elements.append(Spacer(1, 0.2*inch))
+                    
+                    # Metadata
+                    elements.append(Paragraph(f"<b>Generated:</b> {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}", styles['Normal']))
+                    elements.append(Paragraph(f"<b>Region:</b> {st.session_state.get('country_name', 'N/A')}", styles['Normal']))
+                    elements.append(Paragraph(f"<b>Signal:</b> {st.session_state.get('signal_type', 'N/A')}", styles['Normal']))
+                    elements.append(Paragraph(f"<b>Year:</b> {st.session_state.get('year_to_process', 'N/A')}", styles['Normal']))
+                    elements.append(Spacer(1, 0.3*inch))
+                    
+                    # Configuration table
+                    elements.append(Paragraph("1. Configuration Parameters", heading_style))
+                    
+                    config_data = [
+                        ['Parameter', 'Value'],
+                        ['Signal Type', str(st.session_state.get('signal_type', 'N/A'))],
+                        ['Year', str(st.session_state.get('year_to_process', 'N/A'))],
+                        ['Wavelet Shape', str(st.session_state.get('wavelet_shape', 'N/A'))],
+                        ['Sampling Rate', f"{st.session_state.get('ndpd', 'N/A')} points/day"],
+                        ['Time Scales', '15 (0.75h to 8760h)'],
+                    ]
+                    
+                    table = Table(config_data, colWidths=[3*inch, 3*inch])
+                    table.setStyle(TableStyle([
+                        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2E86AB')),
+                        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                        ('FONTSIZE', (0, 0), (-1, 0), 12),
+                        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                        ('GRID', (0, 0), (-1, -1), 1, colors.black),
+                        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.lightgrey]),
+                    ]))
+                    
+                    elements.append(table)
+                    elements.append(Spacer(1, 0.3*inch))
+                    
+                    # Add visualizations
+                    if 'generated_plots' in st.session_state and st.session_state['generated_plots']:
+                        elements.append(Paragraph("2. Visualizations", heading_style))
+                        
+                        for idx, plot_data in enumerate(st.session_state['generated_plots']):
+                            if plot_data['fig'] is not None:
+                                # Convert to image
+                                buf = BytesIO()
+                                plot_data['fig'].savefig(buf, format='png', dpi=150, bbox_inches='tight')
+                                buf.seek(0)
+                                
+                                # Add to PDF
+                                img = Image(buf, width=6*inch, height=4*inch)
+                                elements.append(img)
+                                elements.append(Paragraph(f"<i>Figure {idx+1}: {plot_data.get('title', 'Visualization')}</i>", styles['Normal']))
+                                elements.append(Spacer(1, 0.2*inch))
+                    
+                    # Add reconstructions
+                    if 'generated_reconstructions' in st.session_state and st.session_state['generated_reconstructions']:
+                        elements.append(Paragraph("3. Reconstructions", heading_style))
+                        
+                        for idx, recon_data in enumerate(st.session_state['generated_reconstructions']):
+                            if recon_data['fig'] is not None:
+                                # Convert Plotly to image
+                                img_bytes = recon_data['fig'].to_image(format="png", width=1200, height=600)
+                                buf = BytesIO(img_bytes)
+                                
+                                # Add to PDF
+                                img = Image(buf, width=6*inch, height=3*inch)
+                                elements.append(img)
+                                elements.append(Paragraph(f"<i>Reconstruction {idx+1}</i>", styles['Normal']))
+                                elements.append(Spacer(1, 0.2*inch))
+                    
+                    # Methodology
+                    elements.append(Paragraph("4. Methodology Reference", heading_style))
+                    elements.append(Paragraph(
+                        '<b>Based on:</b> A. Clerjon and F. Perdu, "Matching intermittency and '
+                        'electricity storage characteristics through time scale analysis: an energy '
+                        'return on investment comparison", <i>Energy Environ. Sci.</i>, 2019, 12, 693-705',
+                        styles['Normal']
+                    ))
+                    
+                    # Build PDF
+                    doc.build(elements)
+                    
+                    # Get PDF data
+                    pdf_data = buffer.getvalue()
+                    buffer.close()
+                    
+                    # Offer download
+                    st.download_button(
+                        label="⬇️ Download PDF Report",
+                        data=pdf_data,
+                        file_name=f"{export_filename}.pdf",
+                        mime="application/pdf"
+                    )
+                    
+                    st.success("✅ PDF export ready with all figures!")
+                    
+                except ImportError:
+                    st.error("❌ reportlab library not installed")
+                    st.info("Install with: pip install reportlab kaleido")
+                except Exception as e:
+                    st.error(f"❌ Error generating PDF: {str(e)}")
+                    st.exception(e)
 
 # ============================================================================
 # FOOTER
