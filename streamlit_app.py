@@ -1075,7 +1075,7 @@ if 'decomposition_done' in st.session_state and st.session_state['decomposition_
                         else:
                             st.error("Plot data not available")
 # ============================================================================
-# STEP 5: SIGNAL RECONSTRUCTION - FIXED VERSION
+# STEP 5: SIGNAL RECONSTRUCTION - COMPLETE FIXED VERSION
 # ============================================================================
 
 if 'decomposition_done' in st.session_state and st.session_state['decomposition_done']:
@@ -1083,8 +1083,9 @@ if 'decomposition_done' in st.session_state and st.session_state['decomposition_
     st.markdown('<div class="section-header">🔄 Step 5: Signal Reconstruction</div>', unsafe_allow_html=True)
     
     st.markdown("""
-    Reconstruct the signal using selected time scales. This allows you to filter 
-    and analyze specific frequency components.
+    Reconstruct signals using selected time scales. You can reconstruct different signals 
+    and years by selecting them below. If a signal hasn't been decomposed, it will be 
+    automatically decomposed before reconstruction.
     """)
     
     # Initialize storage for generated reconstructions
@@ -1107,11 +1108,13 @@ if 'decomposition_done' in st.session_state and st.session_state['decomposition_
         if st.button("➕ Add Reconstruction", use_container_width=True):
             st.session_state['recon_configs'].append({
                 'id': len(st.session_state['recon_configs']),
+                'signal': st.session_state['signal_type'],
+                'year': st.session_state['year_to_process'],
                 'time_scales': list(st.session_state['time_scales']),
                 'add_offset': False,
                 'generated': False,
                 'fig': None,
-                'signal': None
+                'reconstructed_signal': None
             })
             st.rerun()
     
@@ -1124,6 +1127,70 @@ if 'decomposition_done' in st.session_state and st.session_state['decomposition_
     with col3:
         if st.session_state['generated_reconstructions']:
             st.metric("Generated", len(st.session_state['generated_reconstructions']))
+    
+    # ========================================================================
+    # HELPER FUNCTION: Ensure Signal is Decomposed (from Step 4)
+    # ========================================================================
+    
+    def ensure_decomposition_for_reconstruction(signal, year):
+        """
+        Check if decomposition exists for this signal/year.
+        If not, run decomposition automatically.
+        Returns: (success, results_betas or error_message)
+        """
+        key = f"{signal}_{year}"
+        
+        # Check if already decomposed
+        if key in st.session_state.get('all_decompositions', {}):
+            return True, st.session_state['all_decompositions'][key]['results_betas']
+        
+        # Need to decompose this signal/year
+        st.info(f"⏳ Decomposing {signal} for {year}... This may take a moment.")
+        
+        try:
+            # Extract signal data for this year
+            years_available = st.session_state['years']
+            year_index = years_available.index(year)
+            points_per_year = st.session_state['signal_length']
+            start_idx = year_index * points_per_year
+            end_idx = (year_index + 1) * points_per_year
+            
+            TS_single_year = st.session_state['stacked_input_data'][signal][start_idx:end_idx]
+            
+            # Run decomposition
+            trans_file, matrix_files, results_betas = wavelet_decomposition_single_TS(
+                TS_single_year,
+                year=year,
+                multi_year=None,
+                country_name=st.session_state['country_name'],
+                signal_type=signal,
+                wl_shape=st.session_state['wavelet_shape'],
+                recompute_translation=False,  # Use cached translations
+                dpd=st.session_state['dpd'],
+                ndpd=st.session_state['ndpd'],
+                vy=st.session_state['vy'],
+                vw=st.session_state['vw'],
+                vd=st.session_state['vd']
+            )
+            
+            # Initialize all_decompositions if not exists
+            if 'all_decompositions' not in st.session_state:
+                st.session_state['all_decompositions'] = {}
+            
+            # Store results
+            st.session_state['all_decompositions'][key] = {
+                'results_betas': results_betas,
+                'trans_file': trans_file,
+                'matrix_files': matrix_files
+            }
+            
+            st.success(f"✅ {signal} ({year}) decomposed successfully!")
+            return True, results_betas
+            
+        except Exception as e:
+            error_msg = f"Error decomposing {signal} ({year}): {str(e)}"
+            st.error(error_msg)
+            return False, error_msg
     
     # ========================================================================
     # SECTION 2: CONFIGURE PENDING RECONSTRUCTIONS
@@ -1140,6 +1207,39 @@ if 'decomposition_done' in st.session_state and st.session_state['decomposition_
             full_idx = st.session_state['recon_configs'].index(recon_cfg)
             
             with st.expander(f"⚙️ Reconstruction {full_idx + 1} - Configuration", expanded=True):
+                
+                # Signal and Year selection
+                st.markdown("**Select Signal and Year:**")
+                col1, col2, col3 = st.columns([2, 2, 1])
+                
+                with col1:
+                    recon_cfg['signal'] = st.selectbox(
+                        "Signal type",
+                        options=['Consumption', 'Wind', 'PV'],
+                        index=['Consumption', 'Wind', 'PV'].index(recon_cfg['signal']),
+                        key=f"signal_recon_{full_idx}"
+                    )
+                
+                with col2:
+                    recon_cfg['year'] = st.selectbox(
+                        "Year",
+                        options=st.session_state['years'],
+                        index=st.session_state['years'].index(recon_cfg['year']),
+                        key=f"year_recon_{full_idx}"
+                    )
+                
+                with col3:
+                    if st.button("❌", key=f"cancel_recon_{full_idx}", help="Cancel"):
+                        st.session_state['recon_configs'].remove(recon_cfg)
+                        st.rerun()
+                
+                # Check if this signal/year has been decomposed
+                decomp_key = f"{recon_cfg['signal']}_{recon_cfg['year']}"
+                is_decomposed = decomp_key in st.session_state.get('all_decompositions', {})
+                
+                if not is_decomposed:
+                    st.warning(f"⚠️ {recon_cfg['signal']} ({recon_cfg['year']}) has not been decomposed yet. "
+                             f"It will be automatically decomposed when you generate this reconstruction.")
                 
                 # Time scale selection
                 st.markdown("**Select Time Scales:**")
@@ -1205,13 +1305,6 @@ if 'decomposition_done' in st.session_state and st.session_state['decomposition_
                     key=f"offset_recon_{full_idx}"
                 )
                 
-                # Cancel button
-                col_cancel1, col_cancel2, col_cancel3 = st.columns([1, 2, 1])
-                with col_cancel2:
-                    if st.button("❌ Cancel", key=f"cancel_recon_{full_idx}", use_container_width=True):
-                        st.session_state['recon_configs'].remove(recon_cfg)
-                        st.rerun()
-                
                 # Generate button
                 st.markdown("---")
                 col_gen1, col_gen2, col_gen3 = st.columns([1, 2, 1])
@@ -1226,22 +1319,34 @@ if 'decomposition_done' in st.session_state and st.session_state['decomposition_
                         if not recon_cfg['time_scales']:
                             st.error("⚠️ Please select at least one time scale")
                         else:
-                            with st.spinner("Reconstructing signal..."):
+                            with st.spinner(f"Reconstructing {recon_cfg['signal']} for {recon_cfg['year']}..."):
                                 try:
-                                    # Load matrix
+                                    # CRITICAL: Ensure this signal/year is decomposed
+                                    success, results_or_error = ensure_decomposition_for_reconstruction(
+                                        recon_cfg['signal'], 
+                                        recon_cfg['year']
+                                    )
+                                    
+                                    if not success:
+                                        st.error(f"Cannot reconstruct: {results_or_error}")
+                                        continue
+                                    
+                                    results_betas = results_or_error
+                                    
+                                    # Load matrix for this signal/year
                                     file_mgr = WaveletFileManager(
                                         region=st.session_state['country_name'],
                                         wl_shape=st.session_state['wavelet_shape']
                                     )
-                                    matrix_file = file_mgr.get_matrix_path(st.session_state['year_to_process'])
+                                    matrix_file = file_mgr.get_matrix_path(recon_cfg['year'])
                                     matrix = sparse.load_npz(matrix_file)
                                     
-                                    # Reconstruct
+                                    # Reconstruct using CORRECT betas for this signal/year
                                     reconstructed_signal = reconstruct(
                                         time_scales=st.session_state['time_scales'],
                                         reconstructed_time_scales=recon_cfg['time_scales'],
                                         matrix=matrix,
-                                        beta_sheet=st.session_state['results_betas'][st.session_state['year_to_process']],
+                                        beta_sheet=results_betas[recon_cfg['year']],
                                         title=f'Reconstruction {full_idx + 1}',
                                         xmin=0,
                                         xmax=st.session_state['dpy'],
@@ -1270,13 +1375,12 @@ if 'decomposition_done' in st.session_state and st.session_state['decomposition_
                                             )
                                         )
                                         
-                                        # IMPROVED TITLE: Shows time scales used
+                                        # IMPROVED TITLE: Shows signal, year, and time scales
                                         scales_str = ', '.join([f"{ts}h" for ts in recon_cfg['time_scales'][:5]])
                                         if len(recon_cfg['time_scales']) > 5:
                                             scales_str += f" ... (+{len(recon_cfg['time_scales'])-5} more)"
                                         
-                                        title_text = (f"{st.session_state['signal_type']} - "
-                                                     f"{st.session_state['year_to_process']} - "
+                                        title_text = (f"{recon_cfg['signal']} - {recon_cfg['year']} - "
                                                      f"{len(recon_cfg['time_scales'])} scales: {scales_str}")
                                         
                                         fig.update_layout(
@@ -1290,7 +1394,7 @@ if 'decomposition_done' in st.session_state and st.session_state['decomposition_
                                         
                                         # Store the reconstruction
                                         recon_cfg['fig'] = fig
-                                        recon_cfg['signal'] = reconstructed_signal
+                                        recon_cfg['reconstructed_signal'] = reconstructed_signal
                                         recon_cfg['generated'] = True
                                         recon_cfg['title'] = title_text
                                         
@@ -1358,25 +1462,33 @@ if 'decomposition_done' in st.session_state and st.session_state['decomposition_
                         
                         with col_title:
                             st.markdown(f"**Reconstruction {idx + 1}**")
+                            st.caption(f"{recon_data['signal']} - {recon_data['year']}")
                         
                         with col_remove:
-                            if st.button("🗑️", key=f"remove_recon_{idx}", help="Remove"):
+                            if st.button("🗑️", key=f"remove_recon_display_{idx}", help="Remove"):
                                 st.session_state['generated_reconstructions'].pop(idx)
                                 if recon_data in st.session_state['recon_configs']:
                                     st.session_state['recon_configs'].remove(recon_data)
                                 st.rerun()
                         
-                        # Display the plot
+                        # Display the plot with UNIQUE KEY - CRITICAL FIX
                         if recon_data['fig'] is not None:
-                            st.plotly_chart(recon_data['fig'], use_container_width=True)
+                            st.plotly_chart(
+                                recon_data['fig'], 
+                                use_container_width=True,
+                                key=f"plotly_recon_{idx}_{recon_data['signal']}_{recon_data['year']}"
+                            )
                             
                             # Show info (NOT statistics)
                             with st.expander(f"ℹ️ Info", expanded=False):
+                                st.write(f"**Signal:** {recon_data['signal']}")
+                                st.write(f"**Year:** {recon_data['year']}")
                                 st.write(f"**Time scales:** {len(recon_data['time_scales'])}")
                                 st.write(f"**Scales used:** {', '.join([f'{ts}h' for ts in recon_data['time_scales']])}")
-                                st.write(f"**Offset included:** {'Yes' if recon_data['add_offset'] else 'No'}")
+                                st.write(f"**Offset:** {'Yes' if recon_data['add_offset'] else 'No'}")
                         else:
                             st.error("Reconstruction data not available")
+                            
 # ============================================================================
 # EXPORT WORKFLOW - FIXED VERSION WITH FIGURES
 # ============================================================================
