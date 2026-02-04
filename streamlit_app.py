@@ -671,282 +671,409 @@ if 'data_imported' in st.session_state and st.session_state['data_imported']:
                             st.code(output, language="text")
 
 # ============================================================================
-# STEP 4: VISUALIZATION OPTIONS WITH FIXED CHECKBOXES
+# STEP 4: VISUALIZATION WITH AUTOMATIC DECOMPOSITION
 # ============================================================================
 
 if 'decomposition_done' in st.session_state and st.session_state['decomposition_done']:
     
     st.markdown('<div class="section-header">📈 Step 4: Visualization</div>', unsafe_allow_html=True)
     
-    st.markdown("Select which visualizations to generate:")
+    # Initialize storage for ALL decomposition results (by signal and year)
+    if 'all_decompositions' not in st.session_state:
+        st.session_state['all_decompositions'] = {}
     
-    col1, col2 = st.columns(2)
+    # Store the initial decomposition result
+    initial_key = f"{st.session_state['signal_type']}_{st.session_state['year_to_process']}"
+    if initial_key not in st.session_state['all_decompositions']:
+        st.session_state['all_decompositions'][initial_key] = {
+            'results_betas': st.session_state['results_betas'],
+            'trans_file': st.session_state['trans_file'],
+            'matrix_files': st.session_state['matrix_files']
+        }
+    
+    # Initialize storage for generated plots
+    if 'generated_plots' not in st.session_state:
+        st.session_state['generated_plots'] = []
+    
+    # Initialize storage for plot configurations
+    if 'plot_configs' not in st.session_state:
+        st.session_state['plot_configs'] = []
+    
+    st.markdown("""
+    Create and arrange multiple visualizations. If you select a signal that hasn't been 
+    decomposed yet, it will be automatically decomposed before visualization.
+    """)
+    
+    # Show which signals have been decomposed
+    with st.expander("ℹ️ Decomposition Status", expanded=False):
+        st.markdown("**Currently decomposed signal combinations:**")
+        if st.session_state['all_decompositions']:
+            for key in st.session_state['all_decompositions'].keys():
+                signal, year = key.split('_')
+                st.write(f"✅ {signal} - {year}")
+        else:
+            st.write("No decompositions yet")
+    
+    # ========================================================================
+    # HELPER FUNCTION: Ensure Signal is Decomposed
+    # ========================================================================
+    
+    def ensure_decomposition(signal, year):
+        """
+        Check if decomposition exists for this signal/year.
+        If not, run decomposition automatically.
+        Returns: (success, results_betas or error_message)
+        """
+        key = f"{signal}_{year}"
+        
+        # Check if already decomposed
+        if key in st.session_state['all_decompositions']:
+            return True, st.session_state['all_decompositions'][key]['results_betas']
+        
+        # Need to decompose this signal/year
+        st.info(f"⏳ Decomposing {signal} for {year}... This may take a moment.")
+        
+        try:
+            # Extract signal data for this year
+            years_available = st.session_state['years']
+            year_index = years_available.index(year)
+            points_per_year = st.session_state['signal_length']
+            start_idx = year_index * points_per_year
+            end_idx = (year_index + 1) * points_per_year
+            
+            TS_single_year = st.session_state['stacked_input_data'][signal][start_idx:end_idx]
+            
+            # Run decomposition
+            trans_file, matrix_files, results_betas = wavelet_decomposition_single_TS(
+                TS_single_year,
+                year=year,
+                multi_year=None,
+                country_name=st.session_state['country_name'],
+                signal_type=signal,
+                wl_shape=st.session_state['wavelet_shape'],
+                recompute_translation=False,  # Use cached translations
+                dpd=st.session_state['dpd'],
+                ndpd=st.session_state['ndpd'],
+                vy=st.session_state['vy'],
+                vw=st.session_state['vw'],
+                vd=st.session_state['vd']
+            )
+            
+            # Store results
+            st.session_state['all_decompositions'][key] = {
+                'results_betas': results_betas,
+                'trans_file': trans_file,
+                'matrix_files': matrix_files
+            }
+            
+            st.success(f"✅ {signal} ({year}) decomposed successfully!")
+            return True, results_betas
+            
+        except Exception as e:
+            error_msg = f"Error decomposing {signal} ({year}): {str(e)}"
+            st.error(error_msg)
+            return False, error_msg
+    
+    # ========================================================================
+    # SECTION 1: ADD NEW PLOT CONFIGURATION
+    # ========================================================================
+    
+    st.markdown("### Add New Visualization")
+    
+    col1, col2, col3 = st.columns(3)
     
     with col1:
-        plot_heatmap = st.checkbox(
-            "📊 Plot Heatmap",
-            value=True,
-            help="Display wavelet coefficients as a heatmap"
-        )
+        if st.button("➕ Add Plot", use_container_width=True):
+            st.session_state['plot_configs'].append({
+                'id': len(st.session_state['plot_configs']),
+                'type': 'heatmap',
+                'year': st.session_state['year_to_process'],
+                'signal': st.session_state['signal_type'],
+                'time_scales': list(st.session_state['time_scales']),
+                'generated': False,
+                'fig': None
+            })
+            st.rerun()
     
     with col2:
-        plot_fft_spectrum = st.checkbox(
-            "📉 Plot FFT Spectrum",
-            value=False,
-            help="Display Fourier transform spectrum"
-        )
+        if st.button("🗑️ Clear All Plots", use_container_width=True):
+            st.session_state['generated_plots'] = []
+            st.session_state['plot_configs'] = []
+            st.rerun()
     
-    # Heatmap options
-    if plot_heatmap:
-        st.markdown("#### Heatmap Options")
+    with col3:
+        if st.session_state['generated_plots']:
+            st.metric("Generated Plots", len(st.session_state['generated_plots']))
+    
+    # ========================================================================
+    # SECTION 2: CONFIGURE PENDING PLOTS
+    # ========================================================================
+    
+    pending_plots = [p for p in st.session_state['plot_configs'] if not p['generated']]
+    
+    if pending_plots:
+        st.markdown("---")
+        st.markdown("### Configure New Plots")
         
-        col1, col2, col3 = st.columns(3)
+        for idx, plot_cfg in enumerate(pending_plots):
+            # Find the index in the full list
+            full_idx = st.session_state['plot_configs'].index(plot_cfg)
+            
+            with st.expander(f"⚙️ Plot {full_idx + 1} - Configuration", expanded=True):
+                
+                # Configuration columns
+                col1, col2, col3, col4 = st.columns([2, 2, 2, 1])
+                
+                with col1:
+                    plot_cfg['type'] = st.selectbox(
+                        "Plot type",
+                        options=['heatmap', 'fft'],
+                        index=0 if plot_cfg['type'] == 'heatmap' else 1,
+                        key=f"type_config_{full_idx}"
+                    )
+                
+                with col2:
+                    plot_cfg['year'] = st.selectbox(
+                        "Year",
+                        options=st.session_state['years'],
+                        index=st.session_state['years'].index(plot_cfg['year']),
+                        key=f"year_config_{full_idx}"
+                    )
+                
+                with col3:
+                    plot_cfg['signal'] = st.selectbox(
+                        "Signal type",
+                        options=['Consumption', 'Wind', 'PV'],
+                        index=['Consumption', 'Wind', 'PV'].index(plot_cfg['signal']),
+                        key=f"signal_config_{full_idx}"
+                    )
+                
+                with col4:
+                    if st.button("❌", key=f"cancel_{full_idx}", help="Cancel this plot"):
+                        st.session_state['plot_configs'].remove(plot_cfg)
+                        st.rerun()
+                
+                # Check if this signal/year has been decomposed
+                decomp_key = f"{plot_cfg['signal']}_{plot_cfg['year']}"
+                is_decomposed = decomp_key in st.session_state['all_decompositions']
+                
+                if not is_decomposed:
+                    st.warning(f"⚠️ {plot_cfg['signal']} ({plot_cfg['year']}) has not been decomposed yet. "
+                             f"It will be automatically decomposed when you generate this plot.")
+                
+                # Time scale selection for heatmap
+                if plot_cfg['type'] == 'heatmap':
+                    st.markdown("**Select Time Scales:**")
+                    
+                    # Initialize checkbox state for this plot
+                    checkbox_key = f'plot_checks_{full_idx}'
+                    if checkbox_key not in st.session_state:
+                        st.session_state[checkbox_key] = {ts: True for ts in st.session_state['time_scales']}
+                    
+                    # Select/Deselect buttons
+                    col_btn1, col_btn2, col_spacer = st.columns([1, 1, 3])
+                    
+                    with col_btn1:
+                        if st.button("✅ All", key=f"sel_all_config_{full_idx}"):
+                            for ts in st.session_state['time_scales']:
+                                st.session_state[checkbox_key][ts] = True
+                            st.rerun()
+                    
+                    with col_btn2:
+                        if st.button("❌ None", key=f"desel_all_config_{full_idx}"):
+                            for ts in st.session_state['time_scales']:
+                                st.session_state[checkbox_key][ts] = False
+                            st.rerun()
+                    
+                    # Checkboxes in single line
+                    checkbox_cols = st.columns(15)
+                    
+                    time_scale_info = {
+                        0.75: "0.75h", 1.5: "1.5h", 3.0: "3h", 6.0: "6h", 12.0: "12h", 24.0: "24h",
+                        42.0: "42h", 84.0: "84h", 168.0: "168h", 273.75: "273.75h", 547.5: "547.5h",
+                        1095.0: "1095h", 2190.0: "2190h", 4380.0: "4380h", 8760.0: "8760h"
+                    }
+                    
+                    for i, ts in enumerate(st.session_state['time_scales']):
+                        with checkbox_cols[i]:
+                            current = st.session_state[checkbox_key].get(ts, True)
+                            new = st.checkbox(
+                                time_scale_info[ts],
+                                value=current,
+                                key=f"check_config_{full_idx}_{ts}"
+                            )
+                            if new != current:
+                                st.session_state[checkbox_key][ts] = new
+                    
+                    # Update plot config with selected scales
+                    plot_cfg['time_scales'] = [
+                        ts for ts in st.session_state['time_scales']
+                        if st.session_state[checkbox_key].get(ts, True)
+                    ]
+                    
+                    # Show selection count
+                    if plot_cfg['time_scales']:
+                        st.info(f"✅ Selected {len(plot_cfg['time_scales'])} time scales")
+                    else:
+                        st.warning("⚠️ No time scales selected")
+                
+                # Generate button
+                st.markdown("---")
+                col_gen1, col_gen2, col_gen3 = st.columns([1, 2, 1])
+                
+                with col_gen2:
+                    if st.button(
+                        f"📊 Generate Plot {full_idx + 1}",
+                        key=f"generate_{full_idx}",
+                        type="primary",
+                        use_container_width=True
+                    ):
+                        if plot_cfg['type'] == 'heatmap' and not plot_cfg['time_scales']:
+                            st.error("⚠️ Please select at least one time scale for heatmap")
+                        else:
+                            with st.spinner(f"Generating {plot_cfg['type']}..."):
+                                try:
+                                    # CRITICAL FIX: Ensure this signal/year is decomposed
+                                    success, results_or_error = ensure_decomposition(
+                                        plot_cfg['signal'], 
+                                        plot_cfg['year']
+                                    )
+                                    
+                                    if not success:
+                                        st.error(f"Cannot generate plot: {results_or_error}")
+                                        continue
+                                    
+                                    results_betas = results_or_error
+                                    
+                                    if plot_cfg['type'] == 'heatmap':
+                                        # Generate heatmap using CORRECT betas
+                                        fig = plot_betas_heatmap(
+                                            results_betas=results_betas,  # Use correct betas!
+                                            country_name=st.session_state['country_name'],
+                                            signal_type=plot_cfg['signal'],
+                                            vy=st.session_state['vy'],
+                                            vw=st.session_state['vw'],
+                                            vd=st.session_state['vd'],
+                                            ndpd=st.session_state['ndpd'],
+                                            dpy=st.session_state['dpy'],
+                                            year=plot_cfg['year'],
+                                            years=[plot_cfg['year']],
+                                            time_scales=st.session_state['time_scales'],
+                                            reconstructed_time_scales=plot_cfg['time_scales'],
+                                            cmin=-0.1,
+                                            cmax=0.1,
+                                            ccenter=None,
+                                            wl_shape=st.session_state['wavelet_shape']
+                                        )
+                                    
+                                    elif plot_cfg['type'] == 'fft':
+                                        # Get data for selected year and signal
+                                        years_available = st.session_state['years']
+                                        year_index = years_available.index(plot_cfg['year'])
+                                        points_per_year = st.session_state['signal_length']
+                                        start_idx = year_index * points_per_year
+                                        end_idx = (year_index + 1) * points_per_year
+                                        
+                                        input_data = st.session_state['stacked_input_data'][plot_cfg['signal']][start_idx:end_idx]
+                                        
+                                        fig = fft(
+                                            ndpd=st.session_state['ndpd'],
+                                            dpy=st.session_state['dpy'],
+                                            signal_type=plot_cfg['signal'],
+                                            year=plot_cfg['year'],
+                                            input_data=input_data
+                                        )
+                                    
+                                    # Store the generated plot
+                                    plot_cfg['fig'] = fig
+                                    plot_cfg['generated'] = True
+                                    plot_cfg['title'] = f"{plot_cfg['type'].upper()}: {plot_cfg['signal']} - {plot_cfg['year']}"
+                                    
+                                    # Add to generated plots
+                                    st.session_state['generated_plots'].append(plot_cfg)
+                                    
+                                    st.success(f"✅ Plot {full_idx + 1} generated!")
+                                    st.rerun()
+                                
+                                except Exception as e:
+                                    st.error(f"❌ Error generating plot: {str(e)}")
+                                    st.exception(e)
+    
+    # ========================================================================
+    # SECTION 3: DISPLAY ALL GENERATED PLOTS
+    # ========================================================================
+    
+    if st.session_state['generated_plots']:
+        st.markdown("---")
+        st.markdown("### Generated Visualizations")
         
-        with col1:
-            cmin = st.number_input("Color scale minimum", value=-0.1, format="%.3f")
-        with col2:
-            cmax = st.number_input("Color scale maximum", value=0.1, format="%.3f")
-        with col3:
-            ccenter = st.number_input(
-                "Color scale center",
-                value=0.0,
-                format="%.3f",
-                help="Center of diverging colormap (0 for automatic)"
+        # Layout options
+        col_layout1, col_layout2, col_layout3 = st.columns(3)
+        
+        with col_layout1:
+            layout_option = st.radio(
+                "Layout",
+                options=["Grid (2 columns)", "Grid (3 columns)", "Stacked (1 column)"],
+                index=0,
+                help="Choose how to arrange multiple plots"
             )
-            if ccenter == 0.0:
-                ccenter = None
         
-        # ====================================================================
-        # TIME SCALE SELECTION WITH FIXED CHECKBOXES
-        # ====================================================================
-        
-        st.markdown("#### Select Time Scales to Display")
-        
-        # Time scale info (shortened labels for single line)
-        time_scale_info = {
-            0.75: "0.75h", 
-            1.5: "1.5h", 
-            3.0: "3h", 
-            6.0: "6h", 
-            12.0: "12h", 
-            24.0: "24h",
-            42.0: "42h", 
-            84.0: "84h", 
-            168.0: "168h", 
-            273.75: "273.75h", 
-            547.5: "547.5h",
-            1095.0: "1095h", 
-            2190.0: "2190h", 
-            4380.0: "4380h", 
-            8760.0: "8760h"
-        }
-        
-        # Initialize session state for checkboxes if not exists
-        if 'time_scale_checkboxes' not in st.session_state:
-            st.session_state['time_scale_checkboxes'] = {ts: True for ts in st.session_state['time_scales']}
-        
-        # Select All / Deselect All buttons
-        col_btn1, col_btn2, col_spacer = st.columns([1, 1, 3])
-        
-        with col_btn1:
-            if st.button("✅ Select All", key="select_all_viz"):
-                # Update all checkboxes to True
-                for ts in st.session_state['time_scales']:
-                    st.session_state['time_scale_checkboxes'][ts] = True
+        with col_layout2:
+            if st.button("🔄 Refresh All Plots", use_container_width=True):
                 st.rerun()
         
-        with col_btn2:
-            if st.button("❌ Deselect All", key="deselect_all_viz"):
-                # Update all checkboxes to False
-                for ts in st.session_state['time_scales']:
-                    st.session_state['time_scale_checkboxes'][ts] = False
-                st.rerun()
+        with col_layout3:
+            st.write(f"**{len(st.session_state['generated_plots'])} plot(s) displayed**")
         
         st.markdown("---")
-        st.markdown("**All Time Scales:**")
         
-        # All 15 checkboxes on a single line - FIXED VERSION
-        checkbox_cols = st.columns(15)
-        
-        for i, ts in enumerate(st.session_state['time_scales']):
-            with checkbox_cols[i]:
-                # Read current value from session state
-                current_value = st.session_state['time_scale_checkboxes'].get(ts, True)
-                
-                # Create checkbox
-                new_value = st.checkbox(
-                    time_scale_info[ts],
-                    value=current_value,
-                    key=f"ts_viz_{ts}",
-                    label_visibility="visible"
-                )
-                
-                # Only update session state if value changed
-                if new_value != current_value:
-                    st.session_state['time_scale_checkboxes'][ts] = new_value
-        
-        # Get selected time scales
-        selected_time_scales_viz = [
-            ts for ts in st.session_state['time_scales'] 
-            if st.session_state['time_scale_checkboxes'].get(ts, True)
-        ]
-        
-        # Display selection count
-        if selected_time_scales_viz:
-            st.info(f"✅ Selected {len(selected_time_scales_viz)} time scales for heatmap")
+        # Determine number of columns
+        if layout_option == "Grid (2 columns)":
+            n_cols = 2
+        elif layout_option == "Grid (3 columns)":
+            n_cols = 3
         else:
-            st.warning("⚠️ No time scales selected. Please select at least one time scale.")
-    
-    # Generate visualizations
-    if st.button("📊 Generate Visualizations"):
+            n_cols = 1
         
-        # Plot heatmap
-        if plot_heatmap and selected_time_scales_viz:
-            with st.spinner("Generating heatmap..."):
-                try:
-                    st.markdown("### Wavelet Coefficients Heatmap")
-                    
-                    fig = plot_betas_heatmap(
-                        results_betas=st.session_state['results_betas'],
-                        country_name=st.session_state['country_name'],
-                        signal_type=st.session_state['signal_type'],
-                        vy=st.session_state['vy'],
-                        vw=st.session_state['vw'],
-                        vd=st.session_state['vd'],
-                        ndpd=st.session_state['ndpd'],
-                        dpy=st.session_state['dpy'],
-                        year=st.session_state['year_to_process'],
-                        years=[st.session_state['year_to_process']],
-                        time_scales=st.session_state['time_scales'],
-                        reconstructed_time_scales=selected_time_scales_viz,
-                        cmin=cmin,
-                        cmax=cmax,
-                        ccenter=ccenter,
-                        wl_shape=st.session_state['wavelet_shape']
-                    )
-                    
-                    st.pyplot(fig)
-                    st.success("✅ Heatmap generated!")
-                    
-                except Exception as e:
-                    st.error(f"❌ Error generating heatmap: {str(e)}")
-                    st.exception(e)
+        # Display plots in grid
+        plots = st.session_state['generated_plots']
         
-        # Plot FFT spectrum
-        if plot_fft_spectrum:
-            with st.spinner("Generating FFT spectrum..."):
-                try:
-                    st.markdown("### FFT Spectrum")
-                    
-                    # Get full time series for FFT
-                    years_available = st.session_state['years']
-                    year_index = years_available.index(st.session_state['year_to_process'])
-                    points_per_year = st.session_state['signal_length']
-                    start_idx = year_index * points_per_year
-                    end_idx = (year_index + 1) * points_per_year
-                    
-                    input_data = st.session_state['stacked_input_data'][st.session_state['signal_type']][start_idx:end_idx]
-                    
-                    fig = fft(
-                        ndpd=st.session_state['ndpd'],
-                        dpy=st.session_state['dpy'],
-                        signal_type=st.session_state['signal_type'],
-                        year=st.session_state['year_to_process'],
-                        input_data=input_data
-                    )
-                    
-                    st.pyplot(fig)
-                    st.success("✅ FFT spectrum generated!")
-                    
-                except Exception as e:
-                    st.error(f"❌ Error generating FFT spectrum: {str(e)}")
-                    st.exception(e)
-    
-    # ========================================================================
-    # ADD VISUALIZATION SUBPLOTS
-    # ========================================================================
-    
-    if 'visualization_subplots' not in st.session_state:
-        st.session_state['visualization_subplots'] = []
-    
-    st.markdown("---")
-    st.markdown("#### Add More Visualizations")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        if st.button("➕ Add Heatmap Below", key="add_heatmap_below"):
-            st.session_state['visualization_subplots'].append({
-                'type': 'heatmap',
-                'position': 'below',
-                'time_scales': list(st.session_state['time_scales'])
-            })
-            st.rerun()
-    
-    with col2:
-        if st.button("➕ Add FFT Right", key="add_fft_right"):
-            st.session_state['visualization_subplots'].append({
-                'type': 'fft',
-                'position': 'right',
-            })
-            st.rerun()
-    
-    # Display additional visualizations
-    if st.session_state['visualization_subplots']:
-        for idx, viz in enumerate(st.session_state['visualization_subplots']):
-            st.markdown(f"##### Additional Visualization {idx + 1} ({viz['position']})")
+        for i in range(0, len(plots), n_cols):
+            cols = st.columns(n_cols)
             
-            if viz['type'] == 'heatmap':
-                # Generate another heatmap
-                try:
-                    fig = plot_betas_heatmap(
-                        results_betas=st.session_state['results_betas'],
-                        country_name=st.session_state['country_name'],
-                        signal_type=st.session_state['signal_type'],
-                        vy=st.session_state['vy'],
-                        vw=st.session_state['vw'],
-                        vd=st.session_state['vd'],
-                        ndpd=st.session_state['ndpd'],
-                        dpy=st.session_state['dpy'],
-                        year=st.session_state['year_to_process'],
-                        years=[st.session_state['year_to_process']],
-                        time_scales=st.session_state['time_scales'],
-                        reconstructed_time_scales=viz['time_scales'],
-                        cmin=cmin,
-                        cmax=cmax,
-                        ccenter=ccenter,
-                        wl_shape=st.session_state['wavelet_shape']
-                    )
-                    st.pyplot(fig)
-                except Exception as e:
-                    st.error(f"Error: {str(e)}")
-            
-            elif viz['type'] == 'fft':
-                # Generate FFT
-                try:
-                    years_available = st.session_state['years']
-                    year_index = years_available.index(st.session_state['year_to_process'])
-                    points_per_year = st.session_state['signal_length']
-                    start_idx = year_index * points_per_year
-                    end_idx = (year_index + 1) * points_per_year
+            for j in range(n_cols):
+                idx = i + j
+                if idx < len(plots):
+                    plot_data = plots[idx]
                     
-                    input_data = st.session_state['stacked_input_data'][st.session_state['signal_type']][start_idx:end_idx]
-                    
-                    fig = fft(
-                        ndpd=st.session_state['ndpd'],
-                        dpy=st.session_state['dpy'],
-                        signal_type=st.session_state['signal_type'],
-                        year=st.session_state['year_to_process'],
-                        input_data=input_data
-                    )
-                    st.pyplot(fig)
-                except Exception as e:
-                    st.error(f"Error: {str(e)}")
-            
-            # Remove button
-            if st.button("🗑️ Remove This Visualization", key=f"remove_viz_{idx}"):
-                st.session_state['visualization_subplots'].pop(idx)
-                st.rerun()
+                    with cols[j]:
+                        # Plot header with remove button
+                        col_title, col_remove = st.columns([4, 1])
+                        
+                        with col_title:
+                            st.markdown(f"**{plot_data['title']}**")
+                        
+                        with col_remove:
+                            if st.button("🗑️", key=f"remove_plot_{idx}", help="Remove this plot"):
+                                st.session_state['generated_plots'].pop(idx)
+                                # Also remove from configs
+                                if plot_data in st.session_state['plot_configs']:
+                                    st.session_state['plot_configs'].remove(plot_data)
+                                st.rerun()
+                        
+                        # Display the plot
+                        if plot_data['fig'] is not None:
+                            st.pyplot(plot_data['fig'])
+                            
+                            # Show plot info
+                            with st.expander(f"ℹ️ Plot Info", expanded=False):
+                                st.write(f"**Type:** {plot_data['type']}")
+                                st.write(f"**Signal:** {plot_data['signal']}")
+                                st.write(f"**Year:** {plot_data['year']}")
+                                if plot_data['type'] == 'heatmap':
+                                    st.write(f"**Time scales:** {len(plot_data['time_scales'])} selected")
+                        else:
+                            st.error("Plot data not available")
 
 # ============================================================================
 # STEP 5: SIGNAL RECONSTRUCTION WITH FIXES
