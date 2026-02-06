@@ -64,7 +64,8 @@ def plot_betas_heatmap(
         years: List of all years in the dataset
         time_scales: List of all available time scales
         reconstructed_time_scales: List of time scales to plot 
-                                   (default: [24., 168., 8760.] = day, week, year)
+                                   (default: [0.75, 1.5, 3., 6., 12, 24., 42., 84., 168., 273.75, 547.5, 1095., 2190., 4380.,
+        8760.] = day, week, year)
         cmin: Minimum color value (default: None = auto)
         cmax: Maximum color value (default: None = auto)
         ccenter: Center color value (default: None = auto center at 0)
@@ -79,8 +80,9 @@ def plot_betas_heatmap(
     
     # Default to showing day, week, and year scales (most common case)
     if reconstructed_time_scales is None:
-        reconstructed_time_scales = [24., 168., 8760.]
-        print(f"Using default time scales: day (24h), week (168h), year (8760h)")
+        reconstructed_time_scales = [0.75, 1.5, 3., 6., 12, 24., 42., 84., 168., 273.75, 547.5, 1095., 2190., 4380.,
+        8760.]
+        print(f"Using default time scales")
     
     # =========================================================================
     # 2. DETERMINE MATRIX PATH USING FileManager
@@ -507,3 +509,344 @@ def plot_EPN(emax, pmax, n, uf, serv, time_scales, satisfactions, scenario_name)
     plt.title(scenario_name)
 
     plt.show()
+
+
+    def plot_EPN_scenarios_plotly(Emax, UF, Serv, time_scales, scenario_names_list,
+                               satisfactions=[95.],
+                               title="Energy Scenario Comparison",
+                               metrics='all',
+                               show_plots=True,
+                               save_html=None):
+    """
+    Plot EPN comparison for multiple energy scenarios using Plotly (interactive).
+    Creates separate interactive figures for selected metrics.
+    
+    Parameters
+    ----------
+    Emax : list of arrays
+        Energy results for each scenario
+    UF : list of arrays
+        Utilization factor results for each scenario
+    Serv : list of arrays
+        Service results for each scenario
+    time_scales : list
+        List of time scales (hours)
+    scenario_names_list : list of str
+        Names of each scenario
+    satisfactions : list
+        Satisfaction rates used (default: [95.])
+    title : str
+        Title prefix for figures
+    metrics : str or list
+        Which metrics to plot. Options:
+        - 'all' : plot all metrics (UF, Energy, Service)
+        - 'energy' : plot only Energy
+        - 'uf' : plot only Utilization Factor
+        - 'service' : plot only Service
+        - ['energy', 'uf'] : plot specific metrics (list)
+    show_plots : bool
+        Whether to display plots
+    save_html : str or None
+        Directory to save HTML files (None = don't save)
+    
+    Returns
+    -------
+    figures : dict
+        Dictionary of Plotly figure objects (only contains requested metrics)
+    """
+    
+    # Satisfaction index
+    sat_idx = 0
+    
+    # Colors for scenarios (colorblind-friendly palette)
+    colors = [
+        '#0077BB',  # Blue
+        '#EE7733',  # Orange
+        '#009988',  # Teal
+        '#CC3311',  # Red
+        '#33BBEE',  # Cyan
+        '#EE3377',  # Magenta
+        '#BBBBBB',  # Grey
+        '#000000',  # Black
+    ]
+    
+    # Markers
+    markers = ['circle', 'square', 'diamond', 'triangle-up', 'triangle-down', 'cross', 'x', 'star']
+    
+    # Reference lines positions and labels
+    ref_lines = [
+        (24, 'day'),
+        (168, 'week'),
+        (720, 'month'),
+        (8760, 'year')
+    ]
+    
+    # X-axis tick configuration
+    tickvals = [0.75, 3, 10, 24, 168, 720, 8760]
+    ticktext = ['0.75', '3', '10', 'day', 'week', 'month', 'year']
+    
+    figures = {}
+    
+    # =========================================================================
+    # DETERMINE WHICH METRICS TO PLOT
+    # =========================================================================
+    
+    if metrics == 'all':
+        metrics_to_plot = ['uf', 'energy', 'service']
+    elif isinstance(metrics, str):
+        metrics_to_plot = [metrics.lower()]
+    else:
+        metrics_to_plot = [m.lower() for m in metrics]
+    
+    # =========================================================================
+    # FIGURE 1: UTILIZATION FACTOR
+    # =========================================================================
+    
+    if 'uf' in metrics_to_plot:
+        fig_uf = go.Figure()
+        
+        for i, name in enumerate(scenario_names_list):
+            # Handle 1D or 2D arrays
+            uf_data = UF[i][:, sat_idx] if UF[i].ndim > 1 else UF[i]
+            
+            fig_uf.add_trace(go.Scatter(
+                x=time_scales,
+                y=uf_data,
+                mode='lines+markers',
+                name=name,
+                line=dict(color=colors[i % len(colors)], width=2),
+                marker=dict(symbol=markers[i % len(markers)], size=10)
+            ))
+        
+        # Add reference lines
+        for xval, label in ref_lines:
+            fig_uf.add_vline(x=xval, line_dash="dash", line_color="gray", opacity=0.5)
+        
+        fig_uf.update_layout(
+            title=f"{title} - Utilization Factor ({satisfactions[sat_idx]}% satisfaction)",
+            xaxis_title="Cycle length (h)",
+            yaxis_title="Utilization Factor (%)",
+            xaxis_type="log",
+            xaxis=dict(tickvals=tickvals, ticktext=ticktext),
+            yaxis=dict(range=[0, 105]),
+            legend=dict(x=0.02, y=0.98),
+            hovermode='x unified',
+            template='plotly_white'
+        )
+        
+        figures['uf'] = fig_uf
+    
+    # =========================================================================
+    # FIGURE 2: ENERGY
+    # =========================================================================
+    
+    if 'energy' in metrics_to_plot:
+        fig_energy = go.Figure()
+        
+        for i, name in enumerate(scenario_names_list):
+            emax_data = Emax[i][:, sat_idx] if Emax[i].ndim > 1 else Emax[i]
+            
+            fig_energy.add_trace(go.Scatter(
+                x=time_scales,
+                y=emax_data,
+                mode='lines+markers',
+                name=name,
+                line=dict(color=colors[i % len(colors)], width=2),
+                marker=dict(symbol=markers[i % len(markers)], size=10)
+            ))
+        
+        for xval, label in ref_lines:
+            fig_energy.add_vline(x=xval, line_dash="dash", line_color="gray", opacity=0.5)
+        
+        fig_energy.update_layout(
+            title=f"{title} - Energy Capacity ({satisfactions[sat_idx]}% satisfaction)",
+            xaxis_title="Cycle length (h)",
+            yaxis_title="Energy (MWh)",
+            xaxis_type="log",
+            yaxis_type="log",
+            xaxis=dict(tickvals=tickvals, ticktext=ticktext),
+            legend=dict(x=0.02, y=0.98),
+            hovermode='x unified',
+            template='plotly_white'
+        )
+        
+        figures['energy'] = fig_energy
+    
+    # =========================================================================
+    # FIGURE 3: SERVICE
+    # =========================================================================
+    
+    if 'service' in metrics_to_plot:
+        fig_service = go.Figure()
+        
+        for i, name in enumerate(scenario_names_list):
+            serv_data = Serv[i][:, sat_idx] if Serv[i].ndim > 1 else Serv[i]
+            
+            fig_service.add_trace(go.Scatter(
+                x=time_scales,
+                y=serv_data,
+                mode='lines+markers',
+                name=name,
+                line=dict(color=colors[i % len(colors)], width=2),
+                marker=dict(symbol=markers[i % len(markers)], size=10)
+            ))
+        
+        for xval, label in ref_lines:
+            fig_service.add_vline(x=xval, line_dash="dash", line_color="gray", opacity=0.5)
+        
+        fig_service.update_layout(
+            title=f"{title} - Service ({satisfactions[sat_idx]}% satisfaction)",
+            xaxis_title="Cycle length (h)",
+            yaxis_title="E × n_cycles (MWh/year)",
+            xaxis_type="log",
+            xaxis=dict(tickvals=tickvals, ticktext=ticktext),
+            legend=dict(x=0.02, y=0.98),
+            hovermode='x unified',
+            template='plotly_white'
+        )
+        
+        figures['service'] = fig_service
+    
+    # =========================================================================
+    # SAVE HTML (optional)
+    # =========================================================================
+    
+    if save_html:
+        import os
+        os.makedirs(save_html, exist_ok=True)
+        
+        for name, fig in figures.items():
+            filepath = os.path.join(save_html, f"EPN_scenarios_{name}.html")
+            fig.write_html(filepath)
+            print(f"✅ Saved: {filepath}")
+    
+    # =========================================================================
+    # SHOW PLOTS
+    # =========================================================================
+    
+    if show_plots:
+        for fig in figures.values():
+            fig.show()
+    
+    return figures
+
+
+def plot_EPN_scenarios_plotly_combined(Emax, UF, Serv, time_scales, scenario_names_list,
+                                        satisfactions=[95.],
+                                        title="Energy Scenario Comparison",
+                                        height=500,
+                                        show_plot=True,
+                                        save_html=None):
+    """
+    Plot EPN comparison in a single Plotly figure with 3 subplots.
+    
+    Parameters
+    ----------
+    Same as plot_EPN_scenarios_plotly()
+    height : int
+        Figure height in pixels (default: 500)
+    
+    Returns
+    -------
+    fig : Plotly figure
+    """
+    
+    sat_idx = 0
+    
+    # Colors and markers
+    colors = ['#0077BB', '#EE7733', '#009988', '#CC3311', '#33BBEE', '#EE3377', '#BBBBBB', '#000000']
+    markers = ['circle', 'square', 'diamond', 'triangle-up', 'triangle-down', 'cross', 'x', 'star']
+    
+    # Reference lines
+    ref_lines = [(24, 'day'), (168, 'week'), (720, 'month'), (8760, 'year')]
+    tickvals = [0.75, 3, 10, 24, 168, 720, 8760]
+    ticktext = ['0.75', '3', '10', 'day', 'week', 'month', 'year']
+    
+    # Create subplots
+    fig = make_subplots(
+        rows=1, cols=3,
+        subplot_titles=('Utilization Factor', 'Energy Capacity', 'Service'),
+        horizontal_spacing=0.08
+    )
+    
+    # Add traces for each scenario
+    for i, name in enumerate(scenario_names_list):
+        color = colors[i % len(colors)]
+        marker = markers[i % len(markers)]
+        
+        # UF data
+        uf_data = UF[i][:, sat_idx] if UF[i].ndim > 1 else UF[i]
+        fig.add_trace(go.Scatter(
+            x=time_scales, y=uf_data,
+            mode='lines+markers', name=name,
+            line=dict(color=color, width=2),
+            marker=dict(symbol=marker, size=8),
+            legendgroup=name,
+            showlegend=True
+        ), row=1, col=1)
+        
+        # Energy data
+        emax_data = Emax[i][:, sat_idx] if Emax[i].ndim > 1 else Emax[i]
+        fig.add_trace(go.Scatter(
+            x=time_scales, y=emax_data,
+            mode='lines+markers', name=name,
+            line=dict(color=color, width=2),
+            marker=dict(symbol=marker, size=8),
+            legendgroup=name,
+            showlegend=False
+        ), row=1, col=2)
+        
+        # Service data
+        serv_data = Serv[i][:, sat_idx] if Serv[i].ndim > 1 else Serv[i]
+        fig.add_trace(go.Scatter(
+            x=time_scales, y=serv_data,
+            mode='lines+markers', name=name,
+            line=dict(color=color, width=2),
+            marker=dict(symbol=marker, size=8),
+            legendgroup=name,
+            showlegend=False
+        ), row=1, col=3)
+    
+    # Add reference lines to all subplots
+    for col in [1, 2, 3]:
+        for xval, label in ref_lines:
+            fig.add_vline(x=xval, line_dash="dash", line_color="gray", opacity=0.3, row=1, col=col)
+    
+    # Update axes
+    # Subplot 1: UF
+    fig.update_xaxes(type="log", tickvals=tickvals, ticktext=ticktext, title_text="Cycle length (h)", row=1, col=1)
+    fig.update_yaxes(title_text="Utilization Factor (%)", range=[0, 105], row=1, col=1)
+    
+    # Subplot 2: Energy
+    fig.update_xaxes(type="log", tickvals=tickvals, ticktext=ticktext, title_text="Cycle length (h)", row=1, col=2)
+    fig.update_yaxes(type="log", title_text="Energy (MWh)", row=1, col=2)
+    
+    # Subplot 3: Service
+    fig.update_xaxes(type="log", tickvals=tickvals, ticktext=ticktext, title_text="Cycle length (h)", row=1, col=3)
+    fig.update_yaxes(title_text="E × n_cycles (MWh/year)", row=1, col=3)
+    
+    # Update layout
+    fig.update_layout(
+        title=f"{title} ({satisfactions[sat_idx]}% satisfaction)",
+        height=height,
+        template='plotly_white',
+        hovermode='x unified',
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=-0.25,
+            xanchor="center",
+            x=0.5
+        )
+    )
+    
+    # Save HTML
+    if save_html:
+        fig.write_html(save_html)
+        print(f"✅ Saved: {save_html}")
+    
+    # Show
+    if show_plot:
+        fig.show()
+    
+    return fig

@@ -45,10 +45,15 @@ def wavelet_decomposition_single_TS(TS, year, country_name=None, signal_type=Non
                                     recompute_translation=False,
                                     imp_matrix=True,
                                     dpd=24, dpy=365, 
-                                    ndpd=64, vy=6, vw=3, vd=6):
+                                    ndpd=64, vy=6, vw=3, vd=6,
+                                    external_translations=None,
+                                    reference_signal_type=None):
     """
     Perform wavelet decomposition on a single time series.
     Uses config.py directories for file storage.
+    
+    Supports using pre-computed translations from another signal (e.g., Load)
+    to ensure consistent temporal alignment across multiple signals.
     
     Parameters
     ----------
@@ -80,15 +85,42 @@ def wavelet_decomposition_single_TS(TS, year, country_name=None, signal_type=Non
         Weekly wavelet levels (default: 3)
     vd : int, optional
         Daily wavelet levels (default: 6)
+    external_translations : list or None, optional
+        Translations to use for this decomposition.
+        None = compute OR import translations for THIS signal
+               (normal behavior - uses cached file if exists)
+        list = use these provided translations instead
+               (skips computation/import entirely, no files created)
+        Example: trans_Load (reuse Load's translations for PV)
+        Default: None
+    reference_signal_type : str or None, optional
+        Label for logging (which signal provided translations).
+        Only used for display, no effect on calculation.
+        Example: 'Consumption'
+        Default: None
         
     Returns
     -------
-    trans_file : str
-        Path to translation file
+    trans_files : list or None
+        List of paths to translation files, or None if external_translations used
     matrix_files : list
         List of matrix file paths
     per_year_betas : dict
         Dictionary of beta coefficients by year
+    trans : list
+        The translations used (either computed or external) - useful for reuse
+        
+    Examples
+    --------
+    # Step 1: Decompose Load (computes translations)
+    trans_files_Load, matrix_files_Load, betas_Load, trans_Load = wavelet_decomposition_single_TS(
+        Load_single_year, year='2012', signal_type='Consumption')
+    
+    # Step 2: Use Load's translations for PV (no translation files created)
+    trans_files_PV, matrix_files_PV, betas_PV, _ = wavelet_decomposition_single_TS(
+        PV_single_year, year='2012', signal_type='PV',
+        external_translations=trans_Load, reference_signal_type='Consumption')
+    # Note: trans_files_PV will be None
     """
     
     # =========================================================================
@@ -106,6 +138,9 @@ def wavelet_decomposition_single_TS(TS, year, country_name=None, signal_type=Non
     else:
         years = [str(year)]
     
+    # Determine if using external translations
+    use_external_trans = external_translations is not None
+    
     print(f"\n{'='*70}")
     print(f"WAVELET DECOMPOSITION - {signal_type} - {country_name}")
     print(f"{'='*70}")
@@ -113,39 +148,52 @@ def wavelet_decomposition_single_TS(TS, year, country_name=None, signal_type=Non
     print(f"Data length:        {len(TS)} points")
     print(f"Expected per year:  {ndpd * dpy} points")
     print(f"Wavelet Shape:      {wl_shape}")
-    print(f"Recompute Trans:    {recompute_translation}")
     print(f"Import Matrix:      {imp_matrix}")
     print(f"Parameters:         vy={vy}, vw={vw}, vd={vd}")
+    
+    # Display translation mode
+    if use_external_trans:
+        ref_name = reference_signal_type if reference_signal_type else "external signal"
+        print(f"Translation Mode:   EXTERNAL (from {ref_name})")
+        print(f"                    No calculation, no file I/O")
+    else:
+        print(f"Translation Mode:   COMPUTE/IMPORT (recompute={recompute_translation})")
+    
     print(f"{'='*70}\n")
     
- # =========================================================================
+    # =========================================================================
     # 2. INITIALIZE FILE MANAGER (controls ALL paths)
     # =========================================================================
     
     file_mgr = WaveletFileManager(
         base_dir=config.RESULTS_DIR,
         region=country_name,
-        wl_shape=wl_shape,      # ← Add wavelet shape!
+        wl_shape=wl_shape,
         use_nested=True
     )
+    
     # =========================================================================
     # 3. GET ALL PATHS FROM FILE MANAGER
     # =========================================================================
     
-    # Translation paths (one per year) - MUST be a list!
-    trans_files = [file_mgr.get_translation_path(signal_type, year_str) 
-                   for year_str in years]
+    # Translation paths - only needed if NOT using external translations
+    if not use_external_trans:
+        trans_files = [file_mgr.get_translation_path(signal_type, year_str) 
+                       for year_str in years]
+        path_trans = os.path.dirname(trans_files[0])
+    else:
+        trans_files = None
+        path_trans = None
     
-    # Matrix paths (one per year)
+    # Matrix paths (one per year) - always needed
     matrix_files = [file_mgr.get_matrix_path(year_str) 
                     for year_str in years]
     
-    # Beta paths (one per year)
+    # Beta paths (one per year) - always needed
     beta_files = [file_mgr.get_betas_path(signal_type, year_str) 
                   for year_str in years]
     
     # Get directories for display and creation
-    path_trans = os.path.dirname(trans_files[0])
     matrix_dir = os.path.dirname(matrix_files[0])
     beta_dir = os.path.dirname(beta_files[0])
     
@@ -154,35 +202,69 @@ def wavelet_decomposition_single_TS(TS, year, country_name=None, signal_type=Non
     # =========================================================================
     
     print(f"Creating directories...")
-    create_directory(path_trans)
+    if path_trans:
+        create_directory(path_trans)
     create_directory(matrix_dir)
     create_directory(beta_dir)
     print(f"✅ Directories ready")
     
     print(f"\nPaths from FileManager:")
-    print(f"  Translation dir: {path_trans}")
+    if path_trans:
+        print(f"  Translation dir: {path_trans}")
+        print(f"  Trans files:     {[os.path.basename(f) for f in trans_files]}")
+    else:
+        print(f"  Translation dir: (none - using external translations)")
     print(f"  Matrix dir:      {matrix_dir}")
     print(f"  Beta dir:        {beta_dir}")
-    print(f"  Trans files:     {[os.path.basename(f) for f in trans_files]}")
     print(f"  Matrix files:    {[os.path.basename(f) for f in matrix_files]}\n")
     
     # =========================================================================
-    # 5. COMPUTE/LOAD TRANSLATIONS
+    # 5. GET TRANSLATIONS (EXTERNAL OR COMPUTE)
     # =========================================================================
     
-    print("Processing translations...")
-    
-    # calc_all_translations receives list of paths
-    trans = calc_all_translations(
-        trans_files=trans_files,       # MUST be a list, not a string!
-        input_data=TS,
-        ndpd=ndpd,
-        dpy=dpy,
-        wl_shape=wl_shape,
-        recompute_translation=recompute_translation
-    )
-    
-    print(f"✅ Translations ready for {len(trans)} years\n")
+    if use_external_trans:
+        # =====================================================================
+        # USE EXTERNAL TRANSLATIONS
+        # - No calculation
+        # - No file import
+        # - No file save
+        # =====================================================================
+        print("Using external translations...")
+        trans = external_translations
+        
+        # Validate that external translations match number of years
+        if len(trans) != len(years):
+            raise ValueError(
+                f"External translations length ({len(trans)}) does not match "
+                f"number of years ({len(years)}). "
+                f"Expected one translation per year: {years}"
+            )
+        
+        ref_name = reference_signal_type if reference_signal_type else "external"
+        print(f"✅ Using {len(trans)} translations from {ref_name} signal")
+        print(f"   Translations: {trans}")
+        print(f"   (No translation calculation or file operations)\n")
+        
+    else:
+        # =====================================================================
+        # COMPUTE OR IMPORT TRANSLATIONS (original behavior)
+        # - Calculates if file doesn't exist or recompute_translation=True
+        # - Imports from file if exists and recompute_translation=False
+        # - Saves to file after calculation
+        # =====================================================================
+        print("Processing translations...")
+        
+        trans = calc_all_translations(
+            trans_files=trans_files,
+            input_data=TS,
+            ndpd=ndpd,
+            dpy=dpy,
+            wl_shape=wl_shape,
+            recompute_translation=recompute_translation
+        )
+        
+        print(f"✅ Translations ready for {len(trans)} years")
+        print(f"   Translations: {trans}\n")
 
     # =========================================================================
     # 6. COMPUTE WAVELET DECOMPOSITION
@@ -193,9 +275,6 @@ def wavelet_decomposition_single_TS(TS, year, country_name=None, signal_type=Non
     # Add trailing separator for path concatenation in compute_wavelet_coefficient_betas
     matrix_dir_with_sep = matrix_dir + os.sep
     beta_dir_with_sep = beta_dir + os.sep
-    
-    # Import here to avoid circular imports (if needed)
-    # The function should already be available in the same module
     
     stacked_betas, per_year_betas = compute_wavelet_coefficient_betas(
         signal_in=TS,
@@ -241,21 +320,35 @@ def wavelet_decomposition_single_TS(TS, year, country_name=None, signal_type=Non
     print(f"\n{'='*70}")
     print(f"✅ DECOMPOSITION COMPLETE")
     print(f"{'='*70}")
-    print(f"Translation files:")
-    for tf in trans_files:
-        status = '✅' if os.path.exists(tf) else '❌'
-        print(f"  {status} {tf}")
+    
+    # Show translation source
+    if use_external_trans:
+        ref_name = reference_signal_type if reference_signal_type else "external"
+        print(f"Translations:       From {ref_name} signal")
+        print(f"                    (no files created - used external values)")
+    else:
+        print(f"Translation files:")
+        for tf in trans_files:
+            status = '✅' if os.path.exists(tf) else '❌'
+            print(f"  {status} {tf}")
+    
     print(f"\nMatrix files:")
     for mf in matrix_files:
         status = '✅' if os.path.exists(mf) else '❌'
         print(f"  {status} {mf}")
+    
     print(f"\nBeta files:")
     for bf in beta_files:
         status = '✅' if os.path.exists(bf) else '❌'
         print(f"  {status} {bf}")
+    
     print(f"{'='*70}\n")
     
-    return trans_files, matrix_files, per_year_betas
+    # Return trans_files (None if external), matrix_files, betas, and trans
+    if use_external_trans:
+        return None, matrix_files, per_year_betas, trans
+    else:
+        return trans_files, matrix_files, per_year_betas, trans
 
 
 # =============================================================================
