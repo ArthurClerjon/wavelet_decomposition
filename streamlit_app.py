@@ -1555,103 +1555,73 @@ if 'decomposition_done' in st.session_state and st.session_state['decomposition_
             epn_show_service = st.checkbox("Service", value=False, key="epn_show_service")
     
     # ========================================================================
-    # 6.2 SCENARIO DEFINITION
+    # 6.2 SCENARIO DEFINITION WITH LIVE UPDATE
     # ========================================================================
     
     st.markdown("### Define Energy Mix Scenarios")
     
-    if 'epn_scenarios_config' not in st.session_state:
-        st.session_state['epn_scenarios_config'] = [
-            {'name': '100% PV', 'pv_share': 1.0},
-            {'name': '100% Wind', 'pv_share': 0.0},
-        ]
-    
-    btn_col1, btn_col2, btn_col3, btn_col4 = st.columns(4)
-    with btn_col1:
-        if st.button("➕ Add 50/50 Mix", key="epn_add_5050"):
-            st.session_state['epn_scenarios_config'].append(
-                {'name': '50% PV + 50% Wind', 'pv_share': 0.5}
-            )
-            st.rerun()
-    with btn_col2:
-        if st.button("➕ Add Custom", key="epn_add_custom"):
-            st.session_state['epn_scenarios_config'].append(
-                {'name': 'Custom Mix', 'pv_share': 0.3}
-            )
-            st.rerun()
-    with btn_col3:
-        if st.button("🔄 Reset Scenarios", key="epn_reset"):
-            st.session_state['epn_scenarios_config'] = [
-                {'name': '100% PV', 'pv_share': 1.0},
-                {'name': '100% Wind', 'pv_share': 0.0},
-            ]
-            st.rerun()
-    
-    # Display and edit scenarios
-    epn_scenarios_to_remove = []
-    for idx, scenario in enumerate(st.session_state['epn_scenarios_config']):
-        scen_col1, scen_col2, scen_col3 = st.columns([2, 3, 1])
-        with scen_col1:
-            new_name = st.text_input(
-                f"Scenario {idx+1} Name", 
-                value=scenario['name'],
-                key=f"epn_scenario_name_{idx}",
-                label_visibility="collapsed"
-            )
-            st.session_state['epn_scenarios_config'][idx]['name'] = new_name
-        with scen_col2:
-            new_pv = st.slider(
-                f"PV Share for scenario {idx+1}",
-                min_value=0.0,
-                max_value=1.0,
-                value=float(scenario['pv_share']),
-                format="%.0f%% PV",
-                key=f"epn_scenario_pv_{idx}",
-                label_visibility="collapsed"
-            )
-            st.session_state['epn_scenarios_config'][idx]['pv_share'] = new_pv
-        with scen_col3:
-            if len(st.session_state['epn_scenarios_config']) > 1:
-                if st.button("🗑️", key=f"epn_remove_scenario_{idx}"):
-                    epn_scenarios_to_remove.append(idx)
-    
-    for idx in sorted(epn_scenarios_to_remove, reverse=True):
-        st.session_state['epn_scenarios_config'].pop(idx)
-        st.rerun()
-    
-    # ========================================================================
-    # 6.3 RUN EPN ANALYSIS
-    # ========================================================================
+    # Fixed scenarios (always displayed)
+    st.markdown("**Fixed Scenarios:**")
+    st.markdown("- 🔴 **100% PV** (solar only)")
+    st.markdown("- 🔵 **100% Wind** (wind only)")
+    st.markdown("- ⚫ **0% ENR** (demand variability only)")
     
     st.markdown("---")
     
-    if st.button("🚀 Run EPN Analysis", type="primary", use_container_width=True, key="epn_run_button"):
+    # Custom mix scenario with live sliders
+    st.markdown("**Custom Mix Scenario (live update):**")
+    
+    custom_col1, custom_col2 = st.columns(2)
+    
+    with custom_col1:
+        custom_pv_share = st.slider(
+            "PV Share (%)",
+            min_value=0,
+            max_value=100,
+            value=10,
+            step=5,
+            key="epn_custom_pv_slider",
+            help="Percentage of PV in the custom mix"
+        )
+    
+    with custom_col2:
+        custom_wind_share = st.slider(
+            "Wind Share (%)",
+            min_value=0,
+            max_value=100,
+            value=10,
+            step=5,
+            key="epn_custom_wind_slider",
+            help="Percentage of Wind in the custom mix"
+        )
+    
+    # Display custom mix name
+    custom_mix_name = f"{custom_pv_share}% PV + {custom_wind_share}% Wind"
+    st.info(f"🟢 **Custom Mix:** {custom_mix_name}")
+    
+    # ========================================================================
+    # 6.3 AUTO-COMPUTE EPN (runs automatically when parameters change)
+    # ========================================================================
+    
+    epn_year = st.session_state.get('year_to_process', 'Unknown')
+    epn_time_scales = st.session_state.get('time_scales', [])
+    epn_dpy = st.session_state.get('dpy', 365)
+    
+    # Check if all required signals are decomposed
+    epn_required_signals = ['Consumption', 'PV', 'Wind']
+    epn_all_decomps = st.session_state.get('all_decompositions', {})
+    
+    epn_missing = []
+    for sig in epn_required_signals:
+        key = f"{sig}_{epn_year}"
+        if key not in epn_all_decomps:
+            epn_missing.append(sig)
+    
+    if epn_missing:
+        st.warning(f"⚠️ Missing decompositions: {', '.join(epn_missing)}")
         
-        epn_year = st.session_state['year_to_process']
-        epn_time_scales = st.session_state['time_scales']
-        epn_dpy = st.session_state.get('dpy', 365)
-        
-        epn_progress = st.empty()
-        
-        with st.spinner("Running EPN Analysis..."):
-            
-            # ----------------------------------------------------------------
-            # STEP A: Ensure all signals are decomposed
-            # ----------------------------------------------------------------
-            epn_progress.info("📊 Step 1/3: Checking decompositions...")
-            
-            epn_required_signals = ['Consumption', 'PV', 'Wind']
-            epn_all_decomps = st.session_state.get('all_decompositions', {})
-            
-            epn_missing = []
-            for sig in epn_required_signals:
-                key = f"{sig}_{epn_year}"
-                if key not in epn_all_decomps:
-                    epn_missing.append(sig)
-            
-            if epn_missing:
-                st.warning(f"Missing decompositions: {', '.join(epn_missing)}. Running now...")
-                
+        if st.button("🔄 Decompose Missing Signals", key="epn_decompose_missing"):
+            with st.spinner("Decomposing missing signals..."):
                 # Get reference translations from Consumption if available
                 consumption_key = f"Consumption_{epn_year}"
                 epn_reference_trans = None
@@ -1659,11 +1629,9 @@ if 'decomposition_done' in st.session_state and st.session_state['decomposition_
                 if consumption_key in epn_all_decomps:
                     epn_reference_trans = epn_all_decomps[consumption_key].get('trans')
                 
-                # Decompose missing signals
                 for sig in epn_missing:
-                    epn_progress.info(f"📊 Decomposing {sig}...")
+                    st.info(f"Decomposing {sig}...")
                     
-                    # Extract signal data for this year
                     years_list = st.session_state['years']
                     year_idx = years_list.index(epn_year)
                     pts_per_year = st.session_state['signal_length']
@@ -1672,14 +1640,12 @@ if 'decomposition_done' in st.session_state and st.session_state['decomposition_
                     
                     epn_TS = st.session_state['stacked_input_data'][sig][start_idx:end_idx]
                     
-                    # Use external translations if available
                     ext_trans = None
                     ref_sig = None
                     if sig != 'Consumption' and epn_reference_trans is not None:
                         ext_trans = epn_reference_trans
                         ref_sig = 'Consumption'
                     
-                    # Run decomposition
                     t_file, m_files, r_betas, t_trans = wavelet_decomposition_single_TS(
                         epn_TS,
                         year=epn_year,
@@ -1697,11 +1663,7 @@ if 'decomposition_done' in st.session_state and st.session_state['decomposition_
                         reference_signal_type=ref_sig
                     )
                     
-                    # Store results
                     decomp_key = f"{sig}_{epn_year}"
-                    if 'all_decompositions' not in st.session_state:
-                        st.session_state['all_decompositions'] = {}
-                    
                     st.session_state['all_decompositions'][decomp_key] = {
                         'results_betas': r_betas,
                         'trans_file': t_file,
@@ -1709,83 +1671,64 @@ if 'decomposition_done' in st.session_state and st.session_state['decomposition_
                         'trans': t_trans
                     }
                     
-                    # Update reference for next signals
                     if sig == 'Consumption':
                         epn_reference_trans = t_trans
                 
-                # Refresh decompositions dict
-                epn_all_decomps = st.session_state['all_decompositions']
-            
-            # ----------------------------------------------------------------
-            # STEP B: Get betas and create PMC for scenarios
-            # ----------------------------------------------------------------
-            epn_progress.info("📊 Step 2/3: Computing PMC for scenarios...")
-            
-            epn_betas_Load = epn_all_decomps[f'Consumption_{epn_year}']['results_betas']
-            epn_betas_PV = epn_all_decomps[f'PV_{epn_year}']['results_betas']
-            epn_betas_Wind = epn_all_decomps[f'Wind_{epn_year}']['results_betas']
-            
-            epn_pmc_list = []
-            epn_scenario_names = []
-            
-            for scen in st.session_state['epn_scenarios_config']:
-                pv_share = scen['pv_share']
-                scen_name = scen['name']
-                
-                pmc = [
-                    pv_share * np.array(epn_betas_PV[epn_year][i]) + 
-                    (1 - pv_share) * np.array(epn_betas_Wind[epn_year][i]) - 
-                    np.array(epn_betas_Load[epn_year][i]) 
-                    for i in range(len(epn_time_scales))
-                ]
-                
-                epn_pmc_list.append(pmc)
-                epn_scenario_names.append(scen_name)
-            
-            # ----------------------------------------------------------------
-            # STEP C: Compute EPN
-            # ----------------------------------------------------------------
-            epn_progress.info("📊 Step 3/3: Computing EPN metrics...")
-            
-            epn_Emax, epn_UF, epn_Serv, epn_Pmax = [], [], [], []
-            
-            for pmc in epn_pmc_list:
-                result = calc_epn(pmc, epn_satisfactions, epn_time_scales, epn_dpy, epn_load_factor, shape='square')
-                epn_Emax.append(result['emax'])
-                epn_UF.append(result['uf'])
-                epn_Serv.append(result['serv'])
-                epn_Pmax.append(result['pmax'])
-            
-            # Store results
-            st.session_state['epn_computed'] = True
-            st.session_state['epn_Emax'] = epn_Emax
-            st.session_state['epn_UF'] = epn_UF
-            st.session_state['epn_Serv'] = epn_Serv
-            st.session_state['epn_Pmax'] = epn_Pmax
-            st.session_state['epn_scenario_names'] = epn_scenario_names
-            st.session_state['epn_satisfactions'] = epn_satisfactions
-            st.session_state['epn_time_scales_result'] = epn_time_scales
-            st.session_state['epn_year_result'] = epn_year
-            
-            epn_progress.empty()
-            st.success("✅ EPN Analysis Complete!")
+                st.success("✅ All signals decomposed!")
+                st.rerun()
     
-    # ========================================================================
-    # 6.4 DISPLAY RESULTS
-    # ========================================================================
-    
-    if st.session_state.get('epn_computed', False):
+    else:
+        # All signals are decomposed - compute EPN automatically
         
+        # Get betas
+        epn_betas_Load = epn_all_decomps[f'Consumption_{epn_year}']['results_betas']
+        epn_betas_PV = epn_all_decomps[f'PV_{epn_year}']['results_betas']
+        epn_betas_Wind = epn_all_decomps[f'Wind_{epn_year}']['results_betas']
+        
+        # Define scenarios
+        # Normalize custom shares (they can exceed 100% total)
+        custom_pv_norm = custom_pv_share / 100.0
+        custom_wind_norm = custom_wind_share / 100.0
+        
+        scenarios = [
+            {'name': '100% PV', 'pv': 1.0, 'wind': 0.0, 'color': '#EE7733'},
+            {'name': '100% Wind', 'pv': 0.0, 'wind': 1.0, 'color': '#0077BB'},
+            {'name': '0% ENR (Demand only)', 'pv': 0.0, 'wind': 0.0, 'color': '#333333'},
+            {'name': custom_mix_name, 'pv': custom_pv_norm, 'wind': custom_wind_norm, 'color': '#009988'},
+        ]
+        
+        # Compute PMC and EPN for each scenario
+        epn_Emax, epn_UF, epn_Serv, epn_Pmax = [], [], [], []
+        epn_scenario_names = []
+        epn_colors = []
+        
+        for scen in scenarios:
+            pv_share = scen['pv']
+            wind_share = scen['wind']
+            
+            # PMC = Production - Consumption
+            # For "0% ENR", we just have -Load (no production)
+            pmc = [
+                pv_share * np.array(epn_betas_PV[epn_year][i]) + 
+                wind_share * np.array(epn_betas_Wind[epn_year][i]) - 
+                np.array(epn_betas_Load[epn_year][i]) 
+                for i in range(len(epn_time_scales))
+            ]
+            
+            result = calc_epn(pmc, epn_satisfactions, epn_time_scales, epn_dpy, epn_load_factor, shape='square')
+            epn_Emax.append(result['emax'])
+            epn_UF.append(result['uf'])
+            epn_Serv.append(result['serv'])
+            epn_Pmax.append(result['pmax'])
+            epn_scenario_names.append(scen['name'])
+            epn_colors.append(scen['color'])
+        
+        # ====================================================================
+        # 6.4 DISPLAY RESULTS
+        # ====================================================================
+        
+        st.markdown("---")
         st.markdown("### 📊 EPN Results")
-        
-        # Retrieve stored results
-        disp_Emax = st.session_state['epn_Emax']
-        disp_UF = st.session_state['epn_UF']
-        disp_Serv = st.session_state['epn_Serv']
-        disp_names = st.session_state['epn_scenario_names']
-        disp_ts = st.session_state['epn_time_scales_result']
-        disp_sat = st.session_state['epn_satisfactions']
-        disp_year = st.session_state['epn_year_result']
         
         # Build metrics list
         disp_metrics = []
@@ -1800,8 +1743,7 @@ if 'decomposition_done' in st.session_state and st.session_state['decomposition_
             st.warning("Please select at least one metric to display.")
         else:
             # Plot configuration
-            plot_colors = ['#0077BB', '#EE7733', '#009988', '#CC3311', '#33BBEE', '#EE3377']
-            plot_markers = ['circle', 'square', 'diamond', 'triangle-up', 'triangle-down', 'cross']
+            plot_markers = ['circle', 'square', 'diamond', 'triangle-up']
             plot_tickvals = [0.75, 3, 10, 24, 168, 720, 8760]
             plot_ticktext = ['0.75', '3', '10', 'day', 'week', 'month', 'year']
             plot_reflines = [24, 168, 720, 8760]
@@ -1811,12 +1753,12 @@ if 'decomposition_done' in st.session_state and st.session_state['decomposition_
             if 'energy' in disp_metrics:
                 fig_energy = go.Figure()
                 
-                for i, name in enumerate(disp_names):
-                    emax_data = disp_Emax[i][:, sat_idx] if disp_Emax[i].ndim > 1 else disp_Emax[i]
+                for i, name in enumerate(epn_scenario_names):
+                    emax_data = epn_Emax[i][:, sat_idx] if epn_Emax[i].ndim > 1 else epn_Emax[i]
                     fig_energy.add_trace(go.Scatter(
-                        x=disp_ts, y=emax_data,
+                        x=epn_time_scales, y=emax_data,
                         mode='lines+markers', name=name,
-                        line=dict(color=plot_colors[i % len(plot_colors)], width=2),
+                        line=dict(color=epn_colors[i], width=2),
                         marker=dict(symbol=plot_markers[i % len(plot_markers)], size=10)
                     ))
                 
@@ -1824,7 +1766,7 @@ if 'decomposition_done' in st.session_state and st.session_state['decomposition_
                     fig_energy.add_vline(x=xval, line_dash="dash", line_color="gray", opacity=0.5)
                 
                 fig_energy.update_layout(
-                    title=f"Energy Storage Capacity - {disp_year} ({disp_sat[sat_idx]}% satisfaction)",
+                    title=f"Energy Storage Capacity - {epn_year} ({epn_satisfactions[sat_idx]}% satisfaction)",
                     xaxis_title="Cycle length (h)",
                     yaxis_title="Energy (MWh)",
                     xaxis_type="log",
@@ -1842,12 +1784,12 @@ if 'decomposition_done' in st.session_state and st.session_state['decomposition_
             if 'uf' in disp_metrics:
                 fig_uf = go.Figure()
                 
-                for i, name in enumerate(disp_names):
-                    uf_data = disp_UF[i][:, sat_idx] if disp_UF[i].ndim > 1 else disp_UF[i]
+                for i, name in enumerate(epn_scenario_names):
+                    uf_data = epn_UF[i][:, sat_idx] if epn_UF[i].ndim > 1 else epn_UF[i]
                     fig_uf.add_trace(go.Scatter(
-                        x=disp_ts, y=uf_data,
+                        x=epn_time_scales, y=uf_data,
                         mode='lines+markers', name=name,
-                        line=dict(color=plot_colors[i % len(plot_colors)], width=2),
+                        line=dict(color=epn_colors[i], width=2),
                         marker=dict(symbol=plot_markers[i % len(plot_markers)], size=10)
                     ))
                 
@@ -1855,7 +1797,7 @@ if 'decomposition_done' in st.session_state and st.session_state['decomposition_
                     fig_uf.add_vline(x=xval, line_dash="dash", line_color="gray", opacity=0.5)
                 
                 fig_uf.update_layout(
-                    title=f"Utilization Factor - {disp_year} ({disp_sat[sat_idx]}% satisfaction)",
+                    title=f"Utilization Factor - {epn_year} ({epn_satisfactions[sat_idx]}% satisfaction)",
                     xaxis_title="Cycle length (h)",
                     yaxis_title="Utilization Factor (%)",
                     xaxis_type="log",
@@ -1873,12 +1815,12 @@ if 'decomposition_done' in st.session_state and st.session_state['decomposition_
             if 'service' in disp_metrics:
                 fig_serv = go.Figure()
                 
-                for i, name in enumerate(disp_names):
-                    serv_data = disp_Serv[i][:, sat_idx] if disp_Serv[i].ndim > 1 else disp_Serv[i]
+                for i, name in enumerate(epn_scenario_names):
+                    serv_data = epn_Serv[i][:, sat_idx] if epn_Serv[i].ndim > 1 else epn_Serv[i]
                     fig_serv.add_trace(go.Scatter(
-                        x=disp_ts, y=serv_data,
+                        x=epn_time_scales, y=serv_data,
                         mode='lines+markers', name=name,
-                        line=dict(color=plot_colors[i % len(plot_colors)], width=2),
+                        line=dict(color=epn_colors[i], width=2),
                         marker=dict(symbol=plot_markers[i % len(plot_markers)], size=10)
                     ))
                 
@@ -1886,7 +1828,7 @@ if 'decomposition_done' in st.session_state and st.session_state['decomposition_
                     fig_serv.add_vline(x=xval, line_dash="dash", line_color="gray", opacity=0.5)
                 
                 fig_serv.update_layout(
-                    title=f"Service (E × n_cycles) - {disp_year} ({disp_sat[sat_idx]}% satisfaction)",
+                    title=f"Service (E × n_cycles) - {epn_year} ({epn_satisfactions[sat_idx]}% satisfaction)",
                     xaxis_title="Cycle length (h)",
                     yaxis_title="E × n_cycles (MWh/year)",
                     xaxis_type="log",
@@ -1902,15 +1844,15 @@ if 'decomposition_done' in st.session_state and st.session_state['decomposition_
         # Data table
         with st.expander("📋 View EPN Data Table", expanded=False):
             table_rows = []
-            for i, name in enumerate(disp_names):
-                for j, ts in enumerate(disp_ts):
+            for i, name in enumerate(epn_scenario_names):
+                for j, ts in enumerate(epn_time_scales):
                     table_rows.append({
                         'Scenario': name,
                         'Time Scale (h)': ts,
-                        'Energy (MWh)': disp_Emax[i][j, sat_idx] if disp_Emax[i].ndim > 1 else disp_Emax[i][j],
-                        'Power (MW)': st.session_state['epn_Pmax'][i][j, sat_idx] if st.session_state['epn_Pmax'][i].ndim > 1 else st.session_state['epn_Pmax'][i][j],
-                        'UF (%)': disp_UF[i][j, sat_idx] if disp_UF[i].ndim > 1 else disp_UF[i][j],
-                        'Service (MWh/yr)': disp_Serv[i][j, sat_idx] if disp_Serv[i].ndim > 1 else disp_Serv[i][j]
+                        'Energy (MWh)': epn_Emax[i][j, sat_idx] if epn_Emax[i].ndim > 1 else epn_Emax[i][j],
+                        'Power (MW)': epn_Pmax[i][j, sat_idx] if epn_Pmax[i].ndim > 1 else epn_Pmax[i][j],
+                        'UF (%)': epn_UF[i][j, sat_idx] if epn_UF[i].ndim > 1 else epn_UF[i][j],
+                        'Service (MWh/yr)': epn_Serv[i][j, sat_idx] if epn_Serv[i].ndim > 1 else epn_Serv[i][j]
                     })
             
             epn_df = pd.DataFrame(table_rows)
@@ -1918,7 +1860,7 @@ if 'decomposition_done' in st.session_state and st.session_state['decomposition_
 
 # ============================================================================
 # END OF STEP 6 - EPN ANALYSIS
-# ============================================================================                            
+# ============================================================================                         
 
 # ============================================================================
 # EXPORT WORKFLOW - FIXED VERSION WITH FIGURES
