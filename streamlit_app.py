@@ -25,6 +25,7 @@ from file_manager import WaveletFileManager
 from wavelet_decomposition import wavelet_decomposition_single_TS, reconstruct
 from plots import plot_betas_heatmap, fft
 from import_excel import import_excel
+from calc_EPN import calc_epn
 
 # ============================================================================
 # PAGE CONFIGURATION
@@ -607,7 +608,7 @@ if 'data_imported' in st.session_state and st.session_state['data_imported']:
                 TS_single_year = st.session_state['stacked_input_data'][signal_type][start_idx:end_idx]
                 
                 # Run decomposition
-                trans_file, matrix_files, results_betas = wavelet_decomposition_single_TS(
+                trans_file, matrix_files, results_betas, trans = wavelet_decomposition_single_TS(
                     TS_single_year,
                     year=year_to_process,
                     multi_year=None,
@@ -637,6 +638,7 @@ if 'data_imported' in st.session_state and st.session_state['data_imported']:
                 st.session_state['trans_file'] = trans_file
                 st.session_state['matrix_files'] = matrix_files
                 st.session_state['results_betas'] = results_betas
+                st.session_state['trans'] = trans
                 st.session_state['vy'] = vy
                 st.session_state['vw'] = vw
                 st.session_state['vd'] = vd
@@ -677,18 +679,25 @@ if 'data_imported' in st.session_state and st.session_state['data_imported']:
 if 'decomposition_done' in st.session_state and st.session_state['decomposition_done']:
     
     st.markdown('<div class="section-header">📈 Step 4: Visualization</div>', unsafe_allow_html=True)
-    
-    # Initialize storage for ALL decomposition results (by signal and year)
-    if 'all_decompositions' not in st.session_state:
-        st.session_state['all_decompositions'] = {}
-    
-    # Store the initial decomposition result
-    initial_key = f"{st.session_state['signal_type']}_{st.session_state['year_to_process']}"
-    if initial_key not in st.session_state['all_decompositions']:
+
+  
+# Initialize storage for ALL decomposition results (by signal and year)
+if 'all_decompositions' not in st.session_state:
+    st.session_state['all_decompositions'] = {}
+
+    # Define initial_key for the current signal/year combination
+    # Use .get() to safely access session state values
+    signal_type_current = st.session_state.get('signal_type', 'Unknown')
+    year_current = st.session_state.get('year_to_process', 'Unknown')
+    initial_key = f"{signal_type_current}_{year_current}"
+
+    # Store the initial decomposition result (only if we have valid results)
+    if initial_key not in st.session_state['all_decompositions'] and 'results_betas' in st.session_state:
         st.session_state['all_decompositions'][initial_key] = {
             'results_betas': st.session_state['results_betas'],
-            'trans_file': st.session_state['trans_file'],
-            'matrix_files': st.session_state['matrix_files']
+            'trans_file': st.session_state.get('trans_file'),
+            'matrix_files': st.session_state.get('matrix_files'),
+            'trans': st.session_state.get('trans')
         }
     
     # Initialize storage for generated plots
@@ -717,7 +726,7 @@ if 'decomposition_done' in st.session_state and st.session_state['decomposition_
     # ========================================================================
     # HELPER FUNCTION: Ensure Signal is Decomposed
     # ========================================================================
-    
+    @st.cache_data
     def ensure_decomposition(signal, year):
         """
         Check if decomposition exists for this signal/year.
@@ -744,7 +753,7 @@ if 'decomposition_done' in st.session_state and st.session_state['decomposition_
             TS_single_year = st.session_state['stacked_input_data'][signal][start_idx:end_idx]
             
             # Run decomposition
-            trans_file, matrix_files, results_betas = wavelet_decomposition_single_TS(
+            trans_file, matrix_files, results_betas, trans = wavelet_decomposition_single_TS(
                 TS_single_year,
                 year=year,
                 multi_year=None,
@@ -763,7 +772,8 @@ if 'decomposition_done' in st.session_state and st.session_state['decomposition_
             st.session_state['all_decompositions'][key] = {
                 'results_betas': results_betas,
                 'trans_file': trans_file,
-                'matrix_files': matrix_files
+                'matrix_files': matrix_files,
+                'trans': trans
             }
             
             st.success(f"✅ {signal} ({year}) decomposed successfully!")
@@ -1064,6 +1074,7 @@ if 'decomposition_done' in st.session_state and st.session_state['decomposition_
                         # Display the plot
                         if plot_data['fig'] is not None:
                             st.pyplot(plot_data['fig'])
+                            plt.close(plot_data['fig']) 
                             
                             # Show plot info
                             with st.expander(f"ℹ️ Plot Info", expanded=False):
@@ -1158,7 +1169,7 @@ if 'decomposition_done' in st.session_state and st.session_state['decomposition_
             TS_single_year = st.session_state['stacked_input_data'][signal][start_idx:end_idx]
             
             # Run decomposition
-            trans_file, matrix_files, results_betas = wavelet_decomposition_single_TS(
+            trans_file, matrix_files, results_betas, trans = wavelet_decomposition_single_TS(
                 TS_single_year,
                 year=year,
                 multi_year=None,
@@ -1181,7 +1192,8 @@ if 'decomposition_done' in st.session_state and st.session_state['decomposition_
             st.session_state['all_decompositions'][key] = {
                 'results_betas': results_betas,
                 'trans_file': trans_file,
-                'matrix_files': matrix_files
+                'matrix_files': matrix_files,
+                'trans': trans
             }
             
             st.success(f"✅ {signal} ({year}) decomposed successfully!")
@@ -1488,7 +1500,426 @@ if 'decomposition_done' in st.session_state and st.session_state['decomposition_
                                 st.write(f"**Offset:** {'Yes' if recon_data['add_offset'] else 'No'}")
                         else:
                             st.error("Reconstruction data not available")
-                            
+
+# ============================================================================
+# STEP 6: EPN ANALYSIS - ENERGY FLEXIBILITY REQUIREMENTS
+# ============================================================================
+
+if 'decomposition_done' in st.session_state and st.session_state['decomposition_done']:
+    
+    st.markdown('<div class="section-header">⚡ Step 6: EPN Analysis</div>', unsafe_allow_html=True)
+    
+    st.markdown("""
+    Analyze energy storage flexibility requirements for different renewable energy mix scenarios.
+    Based on **Clerjon & Perdu (2019)** methodology.
+    """)
+    
+    # ========================================================================
+    # 6.1 CONFIGURATION
+    # ========================================================================
+    
+    with st.expander("⚙️ EPN Configuration", expanded=True):
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            epn_satisfaction_rate = st.slider(
+                "Satisfaction Rate (%)",
+                min_value=80.0,
+                max_value=100.0,
+                value=95.0,
+                step=0.5,
+                help="Percentage of time the load will be met by storage",
+                key="epn_satisfaction_slider"
+            )
+            epn_satisfactions = [epn_satisfaction_rate]
+        
+        with col2:
+            epn_load_factor = st.number_input(
+                "Load Factor (MW)",
+                min_value=1000,
+                max_value=100000,
+                value=54000,
+                step=1000,
+                help="Average power consumption (e.g., 54000 MW for France)",
+                key="epn_load_factor_input"
+            )
+        
+        st.markdown("**Select metrics to display:**")
+        metric_col1, metric_col2, metric_col3 = st.columns(3)
+        with metric_col1:
+            epn_show_energy = st.checkbox("Energy", value=True, key="epn_show_energy")
+        with metric_col2:
+            epn_show_uf = st.checkbox("Utilization Factor", value=False, key="epn_show_uf")
+        with metric_col3:
+            epn_show_service = st.checkbox("Service", value=False, key="epn_show_service")
+    
+    # ========================================================================
+    # 6.2 SCENARIO DEFINITION
+    # ========================================================================
+    
+    st.markdown("### Define Energy Mix Scenarios")
+    
+    if 'epn_scenarios_config' not in st.session_state:
+        st.session_state['epn_scenarios_config'] = [
+            {'name': '100% PV', 'pv_share': 1.0},
+            {'name': '100% Wind', 'pv_share': 0.0},
+        ]
+    
+    btn_col1, btn_col2, btn_col3, btn_col4 = st.columns(4)
+    with btn_col1:
+        if st.button("➕ Add 50/50 Mix", key="epn_add_5050"):
+            st.session_state['epn_scenarios_config'].append(
+                {'name': '50% PV + 50% Wind', 'pv_share': 0.5}
+            )
+            st.rerun()
+    with btn_col2:
+        if st.button("➕ Add Custom", key="epn_add_custom"):
+            st.session_state['epn_scenarios_config'].append(
+                {'name': 'Custom Mix', 'pv_share': 0.3}
+            )
+            st.rerun()
+    with btn_col3:
+        if st.button("🔄 Reset Scenarios", key="epn_reset"):
+            st.session_state['epn_scenarios_config'] = [
+                {'name': '100% PV', 'pv_share': 1.0},
+                {'name': '100% Wind', 'pv_share': 0.0},
+            ]
+            st.rerun()
+    
+    # Display and edit scenarios
+    epn_scenarios_to_remove = []
+    for idx, scenario in enumerate(st.session_state['epn_scenarios_config']):
+        scen_col1, scen_col2, scen_col3 = st.columns([2, 3, 1])
+        with scen_col1:
+            new_name = st.text_input(
+                f"Scenario {idx+1} Name", 
+                value=scenario['name'],
+                key=f"epn_scenario_name_{idx}",
+                label_visibility="collapsed"
+            )
+            st.session_state['epn_scenarios_config'][idx]['name'] = new_name
+        with scen_col2:
+            new_pv = st.slider(
+                f"PV Share for scenario {idx+1}",
+                min_value=0.0,
+                max_value=1.0,
+                value=float(scenario['pv_share']),
+                format="%.0f%% PV",
+                key=f"epn_scenario_pv_{idx}",
+                label_visibility="collapsed"
+            )
+            st.session_state['epn_scenarios_config'][idx]['pv_share'] = new_pv
+        with scen_col3:
+            if len(st.session_state['epn_scenarios_config']) > 1:
+                if st.button("🗑️", key=f"epn_remove_scenario_{idx}"):
+                    epn_scenarios_to_remove.append(idx)
+    
+    for idx in sorted(epn_scenarios_to_remove, reverse=True):
+        st.session_state['epn_scenarios_config'].pop(idx)
+        st.rerun()
+    
+    # ========================================================================
+    # 6.3 RUN EPN ANALYSIS
+    # ========================================================================
+    
+    st.markdown("---")
+    
+    if st.button("🚀 Run EPN Analysis", type="primary", use_container_width=True, key="epn_run_button"):
+        
+        epn_year = st.session_state['year_to_process']
+        epn_time_scales = st.session_state['time_scales']
+        epn_dpy = st.session_state.get('dpy', 365)
+        
+        epn_progress = st.empty()
+        
+        with st.spinner("Running EPN Analysis..."):
+            
+            # ----------------------------------------------------------------
+            # STEP A: Ensure all signals are decomposed
+            # ----------------------------------------------------------------
+            epn_progress.info("📊 Step 1/3: Checking decompositions...")
+            
+            epn_required_signals = ['Consumption', 'PV', 'Wind']
+            epn_all_decomps = st.session_state.get('all_decompositions', {})
+            
+            epn_missing = []
+            for sig in epn_required_signals:
+                key = f"{sig}_{epn_year}"
+                if key not in epn_all_decomps:
+                    epn_missing.append(sig)
+            
+            if epn_missing:
+                st.warning(f"Missing decompositions: {', '.join(epn_missing)}. Running now...")
+                
+                # Get reference translations from Consumption if available
+                consumption_key = f"Consumption_{epn_year}"
+                epn_reference_trans = None
+                
+                if consumption_key in epn_all_decomps:
+                    epn_reference_trans = epn_all_decomps[consumption_key].get('trans')
+                
+                # Decompose missing signals
+                for sig in epn_missing:
+                    epn_progress.info(f"📊 Decomposing {sig}...")
+                    
+                    # Extract signal data for this year
+                    years_list = st.session_state['years']
+                    year_idx = years_list.index(epn_year)
+                    pts_per_year = st.session_state['signal_length']
+                    start_idx = year_idx * pts_per_year
+                    end_idx = (year_idx + 1) * pts_per_year
+                    
+                    epn_TS = st.session_state['stacked_input_data'][sig][start_idx:end_idx]
+                    
+                    # Use external translations if available
+                    ext_trans = None
+                    ref_sig = None
+                    if sig != 'Consumption' and epn_reference_trans is not None:
+                        ext_trans = epn_reference_trans
+                        ref_sig = 'Consumption'
+                    
+                    # Run decomposition
+                    t_file, m_files, r_betas, t_trans = wavelet_decomposition_single_TS(
+                        epn_TS,
+                        year=epn_year,
+                        multi_year=None,
+                        country_name=st.session_state['country_name'],
+                        signal_type=sig,
+                        wl_shape=st.session_state['wavelet_shape'],
+                        recompute_translation=False,
+                        dpd=st.session_state['dpd'],
+                        ndpd=st.session_state['ndpd'],
+                        vy=st.session_state['vy'],
+                        vw=st.session_state['vw'],
+                        vd=st.session_state['vd'],
+                        external_translations=ext_trans,
+                        reference_signal_type=ref_sig
+                    )
+                    
+                    # Store results
+                    decomp_key = f"{sig}_{epn_year}"
+                    if 'all_decompositions' not in st.session_state:
+                        st.session_state['all_decompositions'] = {}
+                    
+                    st.session_state['all_decompositions'][decomp_key] = {
+                        'results_betas': r_betas,
+                        'trans_file': t_file,
+                        'matrix_files': m_files,
+                        'trans': t_trans
+                    }
+                    
+                    # Update reference for next signals
+                    if sig == 'Consumption':
+                        epn_reference_trans = t_trans
+                
+                # Refresh decompositions dict
+                epn_all_decomps = st.session_state['all_decompositions']
+            
+            # ----------------------------------------------------------------
+            # STEP B: Get betas and create PMC for scenarios
+            # ----------------------------------------------------------------
+            epn_progress.info("📊 Step 2/3: Computing PMC for scenarios...")
+            
+            epn_betas_Load = epn_all_decomps[f'Consumption_{epn_year}']['results_betas']
+            epn_betas_PV = epn_all_decomps[f'PV_{epn_year}']['results_betas']
+            epn_betas_Wind = epn_all_decomps[f'Wind_{epn_year}']['results_betas']
+            
+            epn_pmc_list = []
+            epn_scenario_names = []
+            
+            for scen in st.session_state['epn_scenarios_config']:
+                pv_share = scen['pv_share']
+                scen_name = scen['name']
+                
+                pmc = [
+                    pv_share * np.array(epn_betas_PV[epn_year][i]) + 
+                    (1 - pv_share) * np.array(epn_betas_Wind[epn_year][i]) - 
+                    np.array(epn_betas_Load[epn_year][i]) 
+                    for i in range(len(epn_time_scales))
+                ]
+                
+                epn_pmc_list.append(pmc)
+                epn_scenario_names.append(scen_name)
+            
+            # ----------------------------------------------------------------
+            # STEP C: Compute EPN
+            # ----------------------------------------------------------------
+            epn_progress.info("📊 Step 3/3: Computing EPN metrics...")
+            
+            epn_Emax, epn_UF, epn_Serv, epn_Pmax = [], [], [], []
+            
+            for pmc in epn_pmc_list:
+                result = calc_epn(pmc, epn_satisfactions, epn_time_scales, epn_dpy, epn_load_factor, shape='square')
+                epn_Emax.append(result['emax'])
+                epn_UF.append(result['uf'])
+                epn_Serv.append(result['serv'])
+                epn_Pmax.append(result['pmax'])
+            
+            # Store results
+            st.session_state['epn_computed'] = True
+            st.session_state['epn_Emax'] = epn_Emax
+            st.session_state['epn_UF'] = epn_UF
+            st.session_state['epn_Serv'] = epn_Serv
+            st.session_state['epn_Pmax'] = epn_Pmax
+            st.session_state['epn_scenario_names'] = epn_scenario_names
+            st.session_state['epn_satisfactions'] = epn_satisfactions
+            st.session_state['epn_time_scales_result'] = epn_time_scales
+            st.session_state['epn_year_result'] = epn_year
+            
+            epn_progress.empty()
+            st.success("✅ EPN Analysis Complete!")
+    
+    # ========================================================================
+    # 6.4 DISPLAY RESULTS
+    # ========================================================================
+    
+    if st.session_state.get('epn_computed', False):
+        
+        st.markdown("### 📊 EPN Results")
+        
+        # Retrieve stored results
+        disp_Emax = st.session_state['epn_Emax']
+        disp_UF = st.session_state['epn_UF']
+        disp_Serv = st.session_state['epn_Serv']
+        disp_names = st.session_state['epn_scenario_names']
+        disp_ts = st.session_state['epn_time_scales_result']
+        disp_sat = st.session_state['epn_satisfactions']
+        disp_year = st.session_state['epn_year_result']
+        
+        # Build metrics list
+        disp_metrics = []
+        if epn_show_energy:
+            disp_metrics.append('energy')
+        if epn_show_uf:
+            disp_metrics.append('uf')
+        if epn_show_service:
+            disp_metrics.append('service')
+        
+        if not disp_metrics:
+            st.warning("Please select at least one metric to display.")
+        else:
+            # Plot configuration
+            plot_colors = ['#0077BB', '#EE7733', '#009988', '#CC3311', '#33BBEE', '#EE3377']
+            plot_markers = ['circle', 'square', 'diamond', 'triangle-up', 'triangle-down', 'cross']
+            plot_tickvals = [0.75, 3, 10, 24, 168, 720, 8760]
+            plot_ticktext = ['0.75', '3', '10', 'day', 'week', 'month', 'year']
+            plot_reflines = [24, 168, 720, 8760]
+            sat_idx = 0
+            
+            # ENERGY PLOT
+            if 'energy' in disp_metrics:
+                fig_energy = go.Figure()
+                
+                for i, name in enumerate(disp_names):
+                    emax_data = disp_Emax[i][:, sat_idx] if disp_Emax[i].ndim > 1 else disp_Emax[i]
+                    fig_energy.add_trace(go.Scatter(
+                        x=disp_ts, y=emax_data,
+                        mode='lines+markers', name=name,
+                        line=dict(color=plot_colors[i % len(plot_colors)], width=2),
+                        marker=dict(symbol=plot_markers[i % len(plot_markers)], size=10)
+                    ))
+                
+                for xval in plot_reflines:
+                    fig_energy.add_vline(x=xval, line_dash="dash", line_color="gray", opacity=0.5)
+                
+                fig_energy.update_layout(
+                    title=f"Energy Storage Capacity - {disp_year} ({disp_sat[sat_idx]}% satisfaction)",
+                    xaxis_title="Cycle length (h)",
+                    yaxis_title="Energy (MWh)",
+                    xaxis_type="log",
+                    yaxis_type="log",
+                    xaxis=dict(tickvals=plot_tickvals, ticktext=plot_ticktext),
+                    legend=dict(x=0.02, y=0.98),
+                    hovermode='x unified',
+                    template='plotly_white',
+                    height=500
+                )
+                
+                st.plotly_chart(fig_energy, use_container_width=True, key="epn_energy_chart")
+            
+            # UF PLOT
+            if 'uf' in disp_metrics:
+                fig_uf = go.Figure()
+                
+                for i, name in enumerate(disp_names):
+                    uf_data = disp_UF[i][:, sat_idx] if disp_UF[i].ndim > 1 else disp_UF[i]
+                    fig_uf.add_trace(go.Scatter(
+                        x=disp_ts, y=uf_data,
+                        mode='lines+markers', name=name,
+                        line=dict(color=plot_colors[i % len(plot_colors)], width=2),
+                        marker=dict(symbol=plot_markers[i % len(plot_markers)], size=10)
+                    ))
+                
+                for xval in plot_reflines:
+                    fig_uf.add_vline(x=xval, line_dash="dash", line_color="gray", opacity=0.5)
+                
+                fig_uf.update_layout(
+                    title=f"Utilization Factor - {disp_year} ({disp_sat[sat_idx]}% satisfaction)",
+                    xaxis_title="Cycle length (h)",
+                    yaxis_title="Utilization Factor (%)",
+                    xaxis_type="log",
+                    xaxis=dict(tickvals=plot_tickvals, ticktext=plot_ticktext),
+                    yaxis=dict(range=[0, 105]),
+                    legend=dict(x=0.02, y=0.98),
+                    hovermode='x unified',
+                    template='plotly_white',
+                    height=500
+                )
+                
+                st.plotly_chart(fig_uf, use_container_width=True, key="epn_uf_chart")
+            
+            # SERVICE PLOT
+            if 'service' in disp_metrics:
+                fig_serv = go.Figure()
+                
+                for i, name in enumerate(disp_names):
+                    serv_data = disp_Serv[i][:, sat_idx] if disp_Serv[i].ndim > 1 else disp_Serv[i]
+                    fig_serv.add_trace(go.Scatter(
+                        x=disp_ts, y=serv_data,
+                        mode='lines+markers', name=name,
+                        line=dict(color=plot_colors[i % len(plot_colors)], width=2),
+                        marker=dict(symbol=plot_markers[i % len(plot_markers)], size=10)
+                    ))
+                
+                for xval in plot_reflines:
+                    fig_serv.add_vline(x=xval, line_dash="dash", line_color="gray", opacity=0.5)
+                
+                fig_serv.update_layout(
+                    title=f"Service (E × n_cycles) - {disp_year} ({disp_sat[sat_idx]}% satisfaction)",
+                    xaxis_title="Cycle length (h)",
+                    yaxis_title="E × n_cycles (MWh/year)",
+                    xaxis_type="log",
+                    xaxis=dict(tickvals=plot_tickvals, ticktext=plot_ticktext),
+                    legend=dict(x=0.02, y=0.98),
+                    hovermode='x unified',
+                    template='plotly_white',
+                    height=500
+                )
+                
+                st.plotly_chart(fig_serv, use_container_width=True, key="epn_service_chart")
+        
+        # Data table
+        with st.expander("📋 View EPN Data Table", expanded=False):
+            table_rows = []
+            for i, name in enumerate(disp_names):
+                for j, ts in enumerate(disp_ts):
+                    table_rows.append({
+                        'Scenario': name,
+                        'Time Scale (h)': ts,
+                        'Energy (MWh)': disp_Emax[i][j, sat_idx] if disp_Emax[i].ndim > 1 else disp_Emax[i][j],
+                        'Power (MW)': st.session_state['epn_Pmax'][i][j, sat_idx] if st.session_state['epn_Pmax'][i].ndim > 1 else st.session_state['epn_Pmax'][i][j],
+                        'UF (%)': disp_UF[i][j, sat_idx] if disp_UF[i].ndim > 1 else disp_UF[i][j],
+                        'Service (MWh/yr)': disp_Serv[i][j, sat_idx] if disp_Serv[i].ndim > 1 else disp_Serv[i][j]
+                    })
+            
+            epn_df = pd.DataFrame(table_rows)
+            st.dataframe(epn_df, use_container_width=True)
+
+# ============================================================================
+# END OF STEP 6 - EPN ANALYSIS
+# ============================================================================                            
+
 # ============================================================================
 # EXPORT WORKFLOW - FIXED VERSION WITH FIGURES
 # ============================================================================
