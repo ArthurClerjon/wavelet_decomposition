@@ -511,12 +511,16 @@ def plot_EPN(emax, pmax, n, uf, serv, time_scales, satisfactions, scenario_name)
     plt.show()
 
 
-    def plot_EPN_scenarios_plotly(Emax, UF, Serv, time_scales, scenario_names_list,
-                               satisfactions=[95.],
-                               title="Energy Scenario Comparison",
-                               metrics='all',
-                               show_plots=True,
-                               save_html=None):
+def plot_EPN_scenarios_plotly(Emax, UF, Serv, time_scales, scenario_names_list,
+                              satisfactions=[95.],
+                              title="Energy Scenario Comparison",
+                              metrics='all',
+                              colors=None,
+                              line_styles=None,
+                              line_widths=None,
+                              height=650,
+                              show_plots=True,
+                              save_html=None):
     """
     Plot EPN comparison for multiple energy scenarios using Plotly (interactive).
     Creates separate interactive figures for selected metrics.
@@ -544,6 +548,15 @@ def plot_EPN(emax, pmax, n, uf, serv, time_scales, satisfactions, scenario_name)
         - 'uf' : plot only Utilization Factor
         - 'service' : plot only Service
         - ['energy', 'uf'] : plot specific metrics (list)
+    colors : list or None
+        Custom colors for each scenario. If None, uses default palette.
+    line_styles : list or None
+        Line dash styles for each scenario: 'solid', 'dash', 'dot', 'dashdot'
+        If None, all lines are solid.
+    line_widths : list or None
+        Line widths for each scenario. If None, all lines have width 3.
+    height : int
+        Figure height in pixels (default: 650)
     show_plots : bool
         Whether to display plots
     save_html : str or None
@@ -554,32 +567,37 @@ def plot_EPN(emax, pmax, n, uf, serv, time_scales, satisfactions, scenario_name)
     figures : dict
         Dictionary of Plotly figure objects (only contains requested metrics)
     """
+    import plotly.graph_objects as go
     
     # Satisfaction index
     sat_idx = 0
     
-    # Colors for scenarios (colorblind-friendly palette)
-    colors = [
-        '#0077BB',  # Blue
-        '#EE7733',  # Orange
-        '#009988',  # Teal
-        '#CC3311',  # Red
-        '#33BBEE',  # Cyan
-        '#EE3377',  # Magenta
-        '#BBBBBB',  # Grey
-        '#000000',  # Black
-    ]
+    # Default colors (colorblind-friendly palette)
+    if colors is None:
+        colors = [
+            '#0077BB',  # Blue
+            '#EE7733',  # Orange
+            '#009988',  # Teal
+            '#CC3311',  # Red
+            '#33BBEE',  # Cyan
+            '#EE3377',  # Magenta
+            '#BBBBBB',  # Grey
+            '#000000',  # Black
+        ]
+    
+    # Default line styles (all solid)
+    if line_styles is None:
+        line_styles = ['solid'] * len(scenario_names_list)
+    
+    # Default line widths
+    if line_widths is None:
+        line_widths = [3] * len(scenario_names_list)
     
     # Markers
     markers = ['circle', 'square', 'diamond', 'triangle-up', 'triangle-down', 'cross', 'x', 'star']
     
-    # Reference lines positions and labels
-    ref_lines = [
-        (24, 'day'),
-        (168, 'week'),
-        (720, 'month'),
-        (8760, 'year')
-    ]
+    # Reference lines positions
+    ref_lines = [24, 168, 720, 8760]
     
     # X-axis tick configuration
     tickvals = [0.75, 3, 10, 24, 168, 720, 8760]
@@ -614,24 +632,45 @@ def plot_EPN(emax, pmax, n, uf, serv, time_scales, satisfactions, scenario_name)
                 y=uf_data,
                 mode='lines+markers',
                 name=name,
-                line=dict(color=colors[i % len(colors)], width=2),
-                marker=dict(symbol=markers[i % len(markers)], size=10)
+                line=dict(
+                    color=colors[i % len(colors)], 
+                    width=line_widths[i % len(line_widths)],
+                    dash=line_styles[i % len(line_styles)]
+                ),
+                marker=dict(symbol=markers[i % len(markers)], size=12),
+                hovertemplate=(
+                    '<b>%{fullData.name}</b><br>' +
+                    'Cycle: %{x}h<br>' +
+                    'UF: %{y:.1f} %<br>' +
+                    '<extra></extra>'
+                )
             ))
         
         # Add reference lines
-        for xval, label in ref_lines:
+        for xval in ref_lines:
             fig_uf.add_vline(x=xval, line_dash="dash", line_color="gray", opacity=0.5)
         
         fig_uf.update_layout(
-            title=f"{title} - Utilization Factor ({satisfactions[sat_idx]}% satisfaction)",
-            xaxis_title="Cycle length (h)",
-            yaxis_title="Utilization Factor (%)",
+            title=dict(
+                text=f"{title} - Utilization Factor ({satisfactions[sat_idx]}% satisfaction)",
+                font=dict(size=20)
+            ),
+            xaxis_title=dict(text="Cycle length (h)", font=dict(size=16)),
+            yaxis_title=dict(text="Utilization Factor (%)", font=dict(size=16)),
             xaxis_type="log",
-            xaxis=dict(tickvals=tickvals, ticktext=ticktext),
-            yaxis=dict(range=[0, 105]),
-            legend=dict(x=0.02, y=0.98),
+            xaxis=dict(
+                tickvals=tickvals, 
+                ticktext=ticktext,
+                tickfont=dict(size=14)
+            ),
+            yaxis=dict(
+                range=[0, 105],
+                tickfont=dict(size=14)
+            ),
+            legend=dict(x=0.02, y=0.98, font=dict(size=16)),
             hovermode='x unified',
-            template='plotly_white'
+            template='plotly_white',
+            height=height
         )
         
         figures['uf'] = fig_uf
@@ -651,23 +690,45 @@ def plot_EPN(emax, pmax, n, uf, serv, time_scales, satisfactions, scenario_name)
                 y=emax_data,
                 mode='lines+markers',
                 name=name,
-                line=dict(color=colors[i % len(colors)], width=2),
-                marker=dict(symbol=markers[i % len(markers)], size=10)
+                line=dict(
+                    color=colors[i % len(colors)], 
+                    width=line_widths[i % len(line_widths)],
+                    dash=line_styles[i % len(line_styles)]
+                ),
+                marker=dict(symbol=markers[i % len(markers)], size=12),
+                hovertemplate=(
+                    '<b>%{fullData.name}</b><br>' +
+                    'Cycle: %{x}h<br>' +
+                    'Energy: %{y:.1f} MWh<br>' +
+                    '<extra></extra>'
+                )
             ))
         
-        for xval, label in ref_lines:
+        for xval in ref_lines:
             fig_energy.add_vline(x=xval, line_dash="dash", line_color="gray", opacity=0.5)
         
         fig_energy.update_layout(
-            title=f"{title} - Energy Capacity ({satisfactions[sat_idx]}% satisfaction)",
-            xaxis_title="Cycle length (h)",
-            yaxis_title="Energy (MWh)",
+            title=dict(
+                text=f"{title} - Energy Capacity ({satisfactions[sat_idx]}% satisfaction)",
+                font=dict(size=20)
+            ),
+            xaxis_title=dict(text="Cycle length (h)", font=dict(size=16)),
+            yaxis_title=dict(text="Energy (MWh)", font=dict(size=16)),
             xaxis_type="log",
             yaxis_type="log",
-            xaxis=dict(tickvals=tickvals, ticktext=ticktext),
-            legend=dict(x=0.02, y=0.98),
+            xaxis=dict(
+                tickvals=tickvals, 
+                ticktext=ticktext,
+                tickfont=dict(size=14)
+            ),
+            yaxis=dict(
+                exponentformat='power',
+                tickfont=dict(size=14)
+            ),
+            legend=dict(x=0.02, y=0.98, font=dict(size=16)),
             hovermode='x unified',
-            template='plotly_white'
+            template='plotly_white',
+            height=height
         )
         
         figures['energy'] = fig_energy
@@ -687,22 +748,44 @@ def plot_EPN(emax, pmax, n, uf, serv, time_scales, satisfactions, scenario_name)
                 y=serv_data,
                 mode='lines+markers',
                 name=name,
-                line=dict(color=colors[i % len(colors)], width=2),
-                marker=dict(symbol=markers[i % len(markers)], size=10)
+                line=dict(
+                    color=colors[i % len(colors)], 
+                    width=line_widths[i % len(line_widths)],
+                    dash=line_styles[i % len(line_styles)]
+                ),
+                marker=dict(symbol=markers[i % len(markers)], size=12),
+                hovertemplate=(
+                    '<b>%{fullData.name}</b><br>' +
+                    'Cycle: %{x}h<br>' +
+                    'Service: %{y:.1f} MWh/yr<br>' +
+                    '<extra></extra>'
+                )
             ))
         
-        for xval, label in ref_lines:
+        for xval in ref_lines:
             fig_service.add_vline(x=xval, line_dash="dash", line_color="gray", opacity=0.5)
         
         fig_service.update_layout(
-            title=f"{title} - Service ({satisfactions[sat_idx]}% satisfaction)",
-            xaxis_title="Cycle length (h)",
-            yaxis_title="E × n_cycles (MWh/year)",
+            title=dict(
+                text=f"{title} - Service ({satisfactions[sat_idx]}% satisfaction)",
+                font=dict(size=20)
+            ),
+            xaxis_title=dict(text="Cycle length (h)", font=dict(size=16)),
+            yaxis_title=dict(text="E × n_cycles (MWh/year)", font=dict(size=16)),
             xaxis_type="log",
-            xaxis=dict(tickvals=tickvals, ticktext=ticktext),
-            legend=dict(x=0.02, y=0.98),
+            xaxis=dict(
+                tickvals=tickvals, 
+                ticktext=ticktext,
+                tickfont=dict(size=14)
+            ),
+            yaxis=dict(
+                exponentformat='power',
+                tickfont=dict(size=14)
+            ),
+            legend=dict(x=0.02, y=0.98, font=dict(size=16)),
             hovermode='x unified',
-            template='plotly_white'
+            template='plotly_white',
+            height=height
         )
         
         figures['service'] = fig_service
@@ -734,7 +817,10 @@ def plot_EPN(emax, pmax, n, uf, serv, time_scales, satisfactions, scenario_name)
 def plot_EPN_scenarios_plotly_combined(Emax, UF, Serv, time_scales, scenario_names_list,
                                         satisfactions=[95.],
                                         title="Energy Scenario Comparison",
-                                        height=500,
+                                        colors=None,
+                                        line_styles=None,
+                                        line_widths=None,
+                                        height=600,
                                         show_plot=True,
                                         save_html=None):
     """
@@ -742,23 +828,55 @@ def plot_EPN_scenarios_plotly_combined(Emax, UF, Serv, time_scales, scenario_nam
     
     Parameters
     ----------
-    Same as plot_EPN_scenarios_plotly()
+    Emax, UF, Serv : list of arrays
+        EPN results for each scenario
+    time_scales : list
+        List of time scales (hours)
+    scenario_names_list : list of str
+        Names of each scenario
+    satisfactions : list
+        Satisfaction rates used (default: [95.])
+    title : str
+        Title for the figure
+    colors : list or None
+        Custom colors for each scenario
+    line_styles : list or None
+        Line dash styles for each scenario
+    line_widths : list or None
+        Line widths for each scenario
     height : int
-        Figure height in pixels (default: 500)
+        Figure height in pixels (default: 600)
+    show_plot : bool
+        Whether to display the plot
+    save_html : str or None
+        Path to save HTML file
     
     Returns
     -------
     fig : Plotly figure
     """
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
     
     sat_idx = 0
     
-    # Colors and markers
-    colors = ['#0077BB', '#EE7733', '#009988', '#CC3311', '#33BBEE', '#EE3377', '#BBBBBB', '#000000']
+    # Default colors
+    if colors is None:
+        colors = ['#0077BB', '#EE7733', '#009988', '#CC3311', '#33BBEE', '#EE3377', '#BBBBBB', '#000000']
+    
+    # Default line styles
+    if line_styles is None:
+        line_styles = ['solid'] * len(scenario_names_list)
+    
+    # Default line widths
+    if line_widths is None:
+        line_widths = [3] * len(scenario_names_list)
+    
+    # Markers
     markers = ['circle', 'square', 'diamond', 'triangle-up', 'triangle-down', 'cross', 'x', 'star']
     
     # Reference lines
-    ref_lines = [(24, 'day'), (168, 'week'), (720, 'month'), (8760, 'year')]
+    ref_lines = [24, 168, 720, 8760]
     tickvals = [0.75, 3, 10, 24, 168, 720, 8760]
     ticktext = ['0.75', '3', '10', 'day', 'week', 'month', 'year']
     
@@ -773,16 +891,19 @@ def plot_EPN_scenarios_plotly_combined(Emax, UF, Serv, time_scales, scenario_nam
     for i, name in enumerate(scenario_names_list):
         color = colors[i % len(colors)]
         marker = markers[i % len(markers)]
+        dash = line_styles[i % len(line_styles)]
+        width = line_widths[i % len(line_widths)]
         
         # UF data
         uf_data = UF[i][:, sat_idx] if UF[i].ndim > 1 else UF[i]
         fig.add_trace(go.Scatter(
             x=time_scales, y=uf_data,
             mode='lines+markers', name=name,
-            line=dict(color=color, width=2),
-            marker=dict(symbol=marker, size=8),
+            line=dict(color=color, width=width, dash=dash),
+            marker=dict(symbol=marker, size=10),
             legendgroup=name,
-            showlegend=True
+            showlegend=True,
+            hovertemplate='<b>%{fullData.name}</b><br>Cycle: %{x}h<br>UF: %{y:.1f} %<extra></extra>'
         ), row=1, col=1)
         
         # Energy data
@@ -790,10 +911,11 @@ def plot_EPN_scenarios_plotly_combined(Emax, UF, Serv, time_scales, scenario_nam
         fig.add_trace(go.Scatter(
             x=time_scales, y=emax_data,
             mode='lines+markers', name=name,
-            line=dict(color=color, width=2),
-            marker=dict(symbol=marker, size=8),
+            line=dict(color=color, width=width, dash=dash),
+            marker=dict(symbol=marker, size=10),
             legendgroup=name,
-            showlegend=False
+            showlegend=False,
+            hovertemplate='<b>%{fullData.name}</b><br>Cycle: %{x}h<br>Energy: %{y:.1f} MWh<extra></extra>'
         ), row=1, col=2)
         
         # Service data
@@ -801,33 +923,43 @@ def plot_EPN_scenarios_plotly_combined(Emax, UF, Serv, time_scales, scenario_nam
         fig.add_trace(go.Scatter(
             x=time_scales, y=serv_data,
             mode='lines+markers', name=name,
-            line=dict(color=color, width=2),
-            marker=dict(symbol=marker, size=8),
+            line=dict(color=color, width=width, dash=dash),
+            marker=dict(symbol=marker, size=10),
             legendgroup=name,
-            showlegend=False
+            showlegend=False,
+            hovertemplate='<b>%{fullData.name}</b><br>Cycle: %{x}h<br>Service: %{y:.1f} MWh/yr<extra></extra>'
         ), row=1, col=3)
     
     # Add reference lines to all subplots
     for col in [1, 2, 3]:
-        for xval, label in ref_lines:
+        for xval in ref_lines:
             fig.add_vline(x=xval, line_dash="dash", line_color="gray", opacity=0.3, row=1, col=col)
     
     # Update axes
     # Subplot 1: UF
-    fig.update_xaxes(type="log", tickvals=tickvals, ticktext=ticktext, title_text="Cycle length (h)", row=1, col=1)
-    fig.update_yaxes(title_text="Utilization Factor (%)", range=[0, 105], row=1, col=1)
+    fig.update_xaxes(type="log", tickvals=tickvals, ticktext=ticktext, 
+                     title_text="Cycle length (h)", title_font=dict(size=14), tickfont=dict(size=12), row=1, col=1)
+    fig.update_yaxes(title_text="Utilization Factor (%)", range=[0, 105], 
+                     title_font=dict(size=14), tickfont=dict(size=12), row=1, col=1)
     
     # Subplot 2: Energy
-    fig.update_xaxes(type="log", tickvals=tickvals, ticktext=ticktext, title_text="Cycle length (h)", row=1, col=2)
-    fig.update_yaxes(type="log", title_text="Energy (MWh)", row=1, col=2)
+    fig.update_xaxes(type="log", tickvals=tickvals, ticktext=ticktext, 
+                     title_text="Cycle length (h)", title_font=dict(size=14), tickfont=dict(size=12), row=1, col=2)
+    fig.update_yaxes(type="log", title_text="Energy (MWh)", exponentformat='power',
+                     title_font=dict(size=14), tickfont=dict(size=12), row=1, col=2)
     
     # Subplot 3: Service
-    fig.update_xaxes(type="log", tickvals=tickvals, ticktext=ticktext, title_text="Cycle length (h)", row=1, col=3)
-    fig.update_yaxes(title_text="E × n_cycles (MWh/year)", row=1, col=3)
+    fig.update_xaxes(type="log", tickvals=tickvals, ticktext=ticktext, 
+                     title_text="Cycle length (h)", title_font=dict(size=14), tickfont=dict(size=12), row=1, col=3)
+    fig.update_yaxes(title_text="E × n_cycles (MWh/year)", exponentformat='power',
+                     title_font=dict(size=14), tickfont=dict(size=12), row=1, col=3)
     
     # Update layout
     fig.update_layout(
-        title=f"{title} ({satisfactions[sat_idx]}% satisfaction)",
+        title=dict(
+            text=f"{title} ({satisfactions[sat_idx]}% satisfaction)",
+            font=dict(size=20)
+        ),
         height=height,
         template='plotly_white',
         hovermode='x unified',
@@ -836,7 +968,8 @@ def plot_EPN_scenarios_plotly_combined(Emax, UF, Serv, time_scales, scenario_nam
             yanchor="bottom",
             y=-0.25,
             xanchor="center",
-            x=0.5
+            x=0.5,
+            font=dict(size=14)
         )
     )
     
@@ -850,3 +983,9 @@ def plot_EPN_scenarios_plotly_combined(Emax, UF, Serv, time_scales, scenario_nam
         fig.show()
     
     return fig
+
+
+
+
+
+
